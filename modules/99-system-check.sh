@@ -1,0 +1,506 @@
+#!/bin/bash
+# modules/99-system-check.sh - Финальная проверка системы и вывод итогов
+# Часть Mail Server Deployment Module System
+
+# --- Загрузка вспомогательных утилит ---
+[[ -z "${UTIL_PRINT_LOADED}" ]] && source ./utils/print.sh 2>/dev/null
+[[ -z "${UTIL_LOGGING_LOADED}" ]] && source ./utils/logging.sh 2>/dev/null
+[[ -z "${UTIL_FUNCTIONS_LOADED}" ]] && source ./utils/functions.sh 2>/dev/null
+
+# --- Проверка прав root ---
+ensure_root
+
+# --- Загружаем конфиг, если нужно ---
+load_config || {
+    print_error "Не удалось загрузить конфигурацию. Убедитесь, что ./config/main.conf существует."
+    log_error "Failed to load required configuration"
+    [[ "$FORCE_MODE" != "true" ]] && exit 1
+}
+
+# --- Проверка переменных ---
+for var in DOMAIN SERVER_IP ADMIN_EMAIL ADMIN_PASSWORD; do
+    if [[ -z "${!var}" ]]; then
+        print_error "Переменная $var не задана"
+        log_error "$var is not set"
+        [[ "$FORCE_MODE" != "true" ]] && exit 1
+    fi
+done
+
+ADMIN_USER="${ADMIN_USER:-webadmin}"
+
+print_header "Финальная проверка системы"
+
+# --- Массивы для хранения результатов ---
+declare -a SERVICES_OK=()
+declare -a SERVICES_FAIL=()
+declare -a PORTS_OK=()
+declare -a PORTS_FAIL=()
+declare -a CONFIGS_OK=()
+declare -a CONFIGS_FAIL=()
+
+# --- Функция проверки службы ---
+check_service() {
+    local service="$1"
+    local description="$2"
+    
+    if systemctl is-active --quiet "$service"; then
+        SERVICES_OK+=("$description")
+        log_info "Service OK: $service"
+        return 0
+    else
+        SERVICES_FAIL+=("$description")
+        log_warn "Service FAIL: $service"
+        return 1
+    fi
+}
+
+# --- Функция проверки порта ---
+check_port() {
+    local port="$1"
+    local description="$2"
+    
+    if ss -tlnp | grep -q ":$port "; then
+        PORTS_OK+=("$description ($port)")
+        log_info "Port OK: $port"
+        return 0
+    else
+        PORTS_FAIL+=("$description ($port)")
+        log_warn "Port FAIL: $port"
+        return 1
+    fi
+}
+
+# --- Функция проверки конфигурации ---
+check_config() {
+    local command="$1"
+    local description="$2"
+    
+    if eval "$command" >/dev/null 2>&1; then
+        CONFIGS_OK+=("$description")
+        log_info "Config OK: $description"
+        return 0
+    else
+        CONFIGS_FAIL+=("$description")
+        log_warn "Config FAIL: $description"
+        return 1
+    fi
+}
+
+# --- Проверка базовых служб ---
+print_step "Проверка системных служб"
+
+check_service "nginx" "Веб-сервер NGINX"
+check_service "postgresql" "База данных PostgreSQL"
+check_service "php8.2-fpm" "PHP-FPM 8.2"
+
+if systemctl list-unit-files | grep -q "named.service"; then
+    check_service "named" "DNS сервер BIND9"
+fi
+
+# --- Проверка почтовых служб ---
+print_step "Проверка почтовых служб"
+
+check_service "postfix" "SMTP сервер Postfix"
+check_service "dovecot" "IMAP/POP3 сервер Dovecot"
+
+if systemctl list-unit-files | grep -q "opendkim.service"; then
+    check_service "opendkim" "DKIM подписи OpenDKIM"
+fi
+
+# --- Проверка портов ---
+print_step "Проверка открытых портов"
+
+check_port "80" "HTTP"
+check_port "443" "HTTPS" || true  # Может отсутствовать без SSL
+check_port "25" "SMTP"
+check_port "587" "SMTP Submission"
+check_port "993" "IMAPS"
+check_port "143" "IMAP"
+check_port "53" "DNS" || true  # Может отсутствовать если DNS не установлен
+
+# --- Проверка конфигураций ---
+print_step "Проверка конфигураций"
+
+check_config "nginx -t" "NGINX конфигурация"
+check_config "postfix check" "Postfix конфигурация"
+check_config "dovecot -n" "Dovecot конфигурация"
+
+if command -v named-checkconf &> /dev/null; then
+    check_config "named-checkconf" "BIND9 конфигурация"
+fi
+
+# --- Проверка баз данных ---
+print_step "Проверка подключений к базам данных"
+
+DB_NAME="${DOMAIN//./_}"
+if PGPASSWORD="$ADMIN_PASSWORD" psql -h localhost -U "$ADMIN_USER" -d "$DB_NAME" -c "\q" 2>/dev/null; then
+    CONFIGS_OK+=("PostgreSQL подключение")
+    log_info "Database connection OK"
+else
+    CONFIGS_FAIL+=("PostgreSQL подключение")
+    log_warn "Database connection FAIL"
+fi
+
+# --- Проверка веб-интерфейсов ---
+print_step "Проверка веб-интерфейсов"
+
+# PostfixAdmin
+if [[ -d "/var/www/mailadmin.$DOMAIN" ]] && [[ -f "/var/www/mailadmin.$DOMAIN/public/index.php" ]]; then
+    CONFIGS_OK+=("PostfixAdmin установлен")
+    log_info "PostfixAdmin installed"
+else
+    CONFIGS_FAIL+=("PostfixAdmin установлен")
+    log_warn "PostfixAdmin not found"
+fi
+
+# Roundcube
+if [[ -d "/var/www/roundcube" ]] && [[ -f "/var/www/roundcube/index.php" ]]; then
+    CONFIGS_OK+=("Roundcube установлен")
+    log_info "Roundcube installed"
+else
+    CONFIGS_FAIL+=("Roundcube установлен")
+    log_warn "Roundcube not found"
+fi
+
+# --- Проверка DNS записей ---
+print_step "Проверка DNS записей"
+
+if command -v dig &> /dev/null; then
+    # Проверяем основную A запись
+    if dig +short "$DOMAIN" | grep -q "$SERVER_IP"; then
+        CONFIGS_OK+=("DNS A запись")
+        log_info "DNS A record OK"
+    else
+        CONFIGS_FAIL+=("DNS A запись")
+        log_warn "DNS A record not found or incorrect"
+    fi
+    
+    # Проверяем MX запись
+    if dig +short MX "$DOMAIN" | grep -q "mail.$DOMAIN"; then
+        CONFIGS_OK+=("DNS MX запись")
+        log_info "DNS MX record OK"
+    else
+        CONFIGS_FAIL+=("DNS MX запись")
+        log_warn "DNS MX record not found"
+    fi
+    
+    # Проверяем DKIM запись
+    if dig +short TXT "mail._domainkey.$DOMAIN" | grep -q "v=DKIM1"; then
+        CONFIGS_OK+=("DKIM DNS запись")
+        log_info "DKIM DNS record OK"
+    else
+        CONFIGS_FAIL+=("DKIM DNS запись")
+        log_warn "DKIM DNS record not found (может потребоваться время для распространения)"
+    fi
+fi
+
+# --- Тест отправки почты ---
+print_step "Тест отправки тестового письма"
+
+if echo "Тестовое письмо от сервера $(hostname) в $(date)" | \
+   sendmail -f "postmaster@$DOMAIN" "$ADMIN_EMAIL" 2>/dev/null; then
+    CONFIGS_OK+=("Отправка почты")
+    log_info "Test email sent successfully"
+else
+    CONFIGS_FAIL+=("Отправка почты")
+    log_warn "Test email failed"
+fi
+
+# --- Подсчет результатов ---
+TOTAL_SERVICES=$((${#SERVICES_OK[@]} + ${#SERVICES_FAIL[@]}))
+TOTAL_PORTS=$((${#PORTS_OK[@]} + ${#PORTS_FAIL[@]}))
+TOTAL_CONFIGS=$((${#CONFIGS_OK[@]} + ${#CONFIGS_FAIL[@]}))
+
+SERVICES_SUCCESS_RATE=$((${#SERVICES_OK[@]} * 100 / TOTAL_SERVICES))
+PORTS_SUCCESS_RATE=$((${#PORTS_OK[@]} * 100 / TOTAL_PORTS))
+CONFIGS_SUCCESS_RATE=$((${#CONFIGS_OK[@]} * 100 / TOTAL_CONFIGS))
+
+OVERALL_SUCCESS_RATE=$(((SERVICES_SUCCESS_RATE + PORTS_SUCCESS_RATE + CONFIGS_SUCCESS_RATE) / 3))
+
+# --- Вывод результатов проверки ---
+print_header "Результаты проверки системы"
+
+print_info "Службы: ${#SERVICES_OK[@]}/${TOTAL_SERVICES} ($SERVICES_SUCCESS_RATE%)"
+print_info "Порты: ${#PORTS_OK[@]}/${TOTAL_PORTS} ($PORTS_SUCCESS_RATE%)"
+print_info "Конфигурации: ${#CONFIGS_OK[@]}/${TOTAL_CONFIGS} ($CONFIGS_SUCCESS_RATE%)"
+print_info "Общий результат: $OVERALL_SUCCESS_RATE%"
+
+if [[ ${#SERVICES_FAIL[@]} -gt 0 ]]; then
+    print_warning "Проблемные службы:"
+    for service in "${SERVICES_FAIL[@]}"; do
+        print_info "  - $service"
+    done
+fi
+
+if [[ ${#PORTS_FAIL[@]} -gt 0 ]]; then
+    print_warning "Недоступные порты:"
+    for port in "${PORTS_FAIL[@]}"; do
+        print_info "  - $port"
+    done
+fi
+
+if [[ ${#CONFIGS_FAIL[@]} -gt 0 ]]; then
+    print_warning "Проблемы с конфигурацией:"
+    for config in "${CONFIGS_FAIL[@]}"; do
+        print_info "  - $config"
+    done
+fi
+
+# --- Итоговый статус ---
+if [[ $OVERALL_SUCCESS_RATE -ge 90 ]]; then
+    print_success "Система готова к работе!"
+    SYSTEM_STATUS="ГОТОВ"
+elif [[ $OVERALL_SUCCESS_RATE -ge 70 ]]; then
+    print_warning "Система работает с незначительными проблемами"
+    SYSTEM_STATUS="ЧАСТИЧНО ГОТОВ"
+else
+    print_error "Система требует внимания администратора"
+    SYSTEM_STATUS="ТРЕБУЕТ НАСТРОЙКИ"
+fi
+
+# --- ФИНАЛЬНЫЙ ОТЧЕТ ---
+print_section "ИТОГОВЫЙ ОТЧЕТ УСТАНОВКИ"
+
+print_success "Сервер развернут: $DOMAIN"
+print_info "Статус системы: $SYSTEM_STATUS"
+print_info "IP адрес: $SERVER_IP"
+print_info "Дата установки: $(date '+%Y-%m-%d %H:%M:%S')"
+
+print_section "ДОСТУПНЫЕ СЕРВИСЫ"
+
+print_info "Основной сайт:"
+print_info "  http://$DOMAIN"
+if ss -tlnp | grep -q ":443 "; then
+    print_info "  https://$DOMAIN"
+fi
+
+print_info ""
+print_info "Управление почтой (PostfixAdmin):"
+print_info "  http://mailadmin.$DOMAIN"
+if ss -tlnp | grep -q ":443 "; then
+    print_info "  https://mailadmin.$DOMAIN"
+fi
+
+print_info ""
+print_info "Веб-почта (Roundcube):"
+print_info "  http://webmail.$DOMAIN"
+if ss -tlnp | grep -q ":443 "; then
+    print_info "  https://webmail.$DOMAIN"
+fi
+
+print_section "УЧЕТНЫЕ ДАННЫЕ"
+
+print_info "Администратор PostfixAdmin:"
+print_info "  Email: $ADMIN_EMAIL"
+print_info "  Пароль: ADMIN_PASSWORD"
+
+print_info ""
+print_info "Системный пользователь:"
+print_info "  Пользователь: $ADMIN_USER"
+print_info "  Пароль: ADMIN_PASSWORD"
+
+print_info ""
+print_info "База данных PostgreSQL:"
+print_info "  Пользователь: $ADMIN_USER"
+print_info "  База: ${DOMAIN//./_}"
+print_info "  Пароль: ADMIN_PASSWORD"
+
+# Тестовый почтовый ящик
+if PGPASSWORD="$ADMIN_PASSWORD" psql -h localhost -U "$ADMIN_USER" -d "${DOMAIN//./_}" \
+   -tAc "SELECT COUNT(*) FROM mailbox WHERE username='test@$DOMAIN';" 2>/dev/null | grep -q "1"; then
+    print_info ""
+    print_info "Тестовый почтовый ящик:"
+    print_info "  Email: test@$DOMAIN"
+    print_info "  Пароль: test123"
+fi
+
+print_section "НАСТРОЙКА ПОЧТОВОГО КЛИЕНТА"
+
+print_info "Входящая почта (IMAP):"
+print_info "  Сервер: $DOMAIN"
+print_info "  Порт: 993 (SSL) или 143 (STARTTLS)"
+print_info "  Безопасность: SSL/TLS"
+
+print_info ""
+print_info "Исходящая почта (SMTP):"
+print_info "  Сервер: $DOMAIN"
+print_info "  Порт: 587 (STARTTLS) или 465 (SSL)"
+print_info "  Аутентификация: Обязательна"
+print_info "  Безопасность: STARTTLS или SSL/TLS"
+
+print_section "СЛЕДУЮЩИЕ ШАГИ"
+
+print_info "1. Настройте DNS записи у регистратора домена:"
+print_info "   NS записи: ns1.$DOMAIN и ns2.$DOMAIN -> $SERVER_IP"
+
+print_info ""
+print_info "2. Дождитесь распространения DNS (24-48 часов)"
+
+print_info ""
+print_info "3. Создайте почтовые ящики через PostfixAdmin:"
+print_info "   http://mailadmin.$DOMAIN"
+
+print_info ""
+print_info "4. Проверьте работу почты:"
+print_info "   https://mail-tester.com"
+print_info "   https://mxtoolbox.com"
+
+if [[ $OVERALL_SUCCESS_RATE -lt 90 ]]; then
+    print_info ""
+    print_info "5. Исправьте выявленные проблемы:"
+    print_info "   Проверьте логи: tail -f /var/log/mail.log"
+    print_info "   Перезапустите службы: systemctl restart postfix dovecot"
+fi
+
+print_section "ПОЛЕЗНЫЕ КОМАНДЫ"
+
+print_info "Проверка статуса служб:"
+print_info "  systemctl status nginx postfix dovecot postgresql"
+
+print_info ""
+print_info "Просмотр логов:"
+print_info "  tail -f /var/log/mail.log"
+print_info "  tail -f /var/log/nginx/error.log"
+print_info "  tail -f $LOG_FILE"
+
+print_info ""
+print_info "Управление DNS:"
+print_info "  rndc reload $DOMAIN"
+print_info "  dig @localhost $DOMAIN"
+
+print_info ""
+print_info "Тестирование почты:"
+print_info "  echo 'Test' | mail -s 'Test' user@$DOMAIN"
+print_info "  mailq  # очередь писем"
+
+print_section "ПОДДЕРЖКА"
+
+print_info "Документация:"
+print_info "  https://github.com/danil-murashkin/server_script"
+
+print_info ""
+print_info "Логи установки:"
+print_info "  $LOG_FILE"
+
+# --- Дублирование итогового отчета в лог-файл ---
+{
+    echo ""
+    echo "=================================================="
+    echo "ИТОГОВЫЙ ОТЧЕТ УСТАНОВКИ"
+    echo "=================================================="
+    echo "Сервер развернут: $DOMAIN"
+    echo "Статус системы: $SYSTEM_STATUS"
+    echo "IP адрес: $SERVER_IP"
+    echo "Дата установки: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo ""
+    echo "ДОСТУПНЫЕ СЕРВИСЫ"
+    echo ""
+    echo "Основной сайт:"
+    echo "  http://$DOMAIN"
+    if ss -tlnp | grep -q ":443 "; then
+        echo "  https://$DOMAIN"
+    fi
+    echo ""
+    echo "Управление почтой (PostfixAdmin):"
+    echo "  http://mailadmin.$DOMAIN"
+    if ss -tlnp | grep -q ":443 "; then
+        echo "  https://mailadmin.$DOMAIN"
+    fi
+    echo ""
+    echo "Веб-почта (Roundcube):"
+    echo "  http://webmail.$DOMAIN"
+    if ss -tlnp | grep -q ":443 "; then
+        echo "  https://webmail.$DOMAIN"
+    fi
+    echo ""
+    echo "УЧЕТНЫЕ ДАННЫЕ"
+    echo ""
+    echo "Администратор PostfixAdmin:"
+    echo "  Email: $ADMIN_EMAIL"
+    echo "  Пароль: ADMIN_PASSWORD"
+    echo ""
+    echo "Системный пользователь:"
+    echo "  Пользователь: $ADMIN_USER"
+    echo "  Пароль: ADMIN_PASSWORD"
+    echo ""
+    echo "База данных PostgreSQL:"
+    echo "  Пользователь: $ADMIN_USER"
+    echo "  База: ${DOMAIN//./_}"
+    echo "  Пароль: ADMIN_PASSWORD"
+    
+    if PGPASSWORD="$ADMIN_PASSWORD" psql -h localhost -U "$ADMIN_USER" -d "${DOMAIN//./_}" \
+       -tAc "SELECT COUNT(*) FROM mailbox WHERE username='test@$DOMAIN';" 2>/dev/null | grep -q "1"; then
+        echo ""
+        echo "Тестовый почтовый ящик:"
+        echo "  Email: test@$DOMAIN"
+        echo "  Пароль: test123"
+    fi
+    echo ""
+    echo "НАСТРОЙКА ПОЧТОВОГО КЛИЕНТА"
+    echo ""
+    echo "Входящая почта (IMAP):"
+    echo "  Сервер: $DOMAIN"
+    echo "  Порт: 993 (SSL) или 143 (STARTTLS)"
+    echo "  Безопасность: SSL/TLS"
+    echo ""
+    echo "Исходящая почта (SMTP):"
+    echo "  Сервер: $DOMAIN"
+    echo "  Порт: 587 (STARTTLS) или 465 (SSL)"
+    echo "  Аутентификация: Обязательна"
+    echo "  Безопасность: STARTTLS или SSL/TLS"
+    echo ""
+    echo "СЛЕДУЮЩИЕ ШАГИ"
+    echo ""
+    echo "1. Настройте DNS записи у регистратора домена:"
+    echo "   NS записи: ns1.$DOMAIN и ns2.$DOMAIN -> $SERVER_IP"
+    echo ""
+    echo "2. Дождитесь распространения DNS (24-48 часов)"
+    echo ""
+    echo "3. Создайте почтовые ящики через PostfixAdmin:"
+    echo "   http://mailadmin.$DOMAIN"
+    echo ""
+    echo "4. Проверьте работу почты:"
+    echo "   https://mail-tester.com"
+    echo "   https://mxtoolbox.com"
+    
+    if [[ $OVERALL_SUCCESS_RATE -lt 90 ]]; then
+        echo ""
+        echo "5. Исправьте выявленные проблемы:"
+        echo "   Проверьте логи: tail -f /var/log/mail.log"
+        echo "   Перезапустите службы: systemctl restart postfix dovecot"
+    fi
+    echo ""
+    echo "ПОЛЕЗНЫЕ КОМАНДЫ"
+    echo ""
+    echo "Проверка статуса служб:"
+    echo "  systemctl status nginx postfix dovecot postgresql"
+    echo ""
+    echo "Просмотр логов:"
+    echo "  tail -f /var/log/mail.log"
+    echo "  tail -f /var/log/nginx/error.log"
+    echo "  tail -f $LOG_FILE"
+    echo ""
+    echo "Управление DNS:"
+    echo "  rndc reload $DOMAIN"
+    echo "  dig @localhost $DOMAIN"
+    echo ""
+    echo "Тестирование почты:"
+    echo "  echo 'Test' | mail -s 'Test' user@$DOMAIN"
+    echo "  mailq  # очередь писем"
+    echo ""
+    echo "ПОДДЕРЖКА"
+    echo ""
+    echo "Документация:"
+    echo "  https://github.com/danil-murashkin/server_script"
+    echo ""
+    echo "Логи установки:"
+    echo "  $LOG_FILE"
+    echo ""
+    echo "Установка завершена! Система $SYSTEM_STATUS."
+    echo "=================================================="
+} >> "$LOG_FILE"
+
+print_success "Установка завершена! Система $SYSTEM_STATUS."
+
+log_info "System check completed. Overall success rate: $OVERALL_SUCCESS_RATE%. Status: $SYSTEM_STATUS"
+log_info "Installation summary logged. Services OK: ${#SERVICES_OK[@]}, Configs OK: ${#CONFIGS_OK[@]}, Ports OK: ${#PORTS_OK[@]}"
