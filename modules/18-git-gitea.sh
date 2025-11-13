@@ -385,7 +385,7 @@ if [[ "$DRY_RUN" == "true" ]]; then
 else
     sleep 5
     
-    if sudo -u $GITEA_USER $GITEA_BINARY admin user list --config /etc/gitea/app.ini 2>/dev/null | grep -q "$GITEA_ADMIN_USER"; then
+    if sudo -u $GITEA_USER $GITEA_BINARY admin user list --config /etc/gitea/app.ini --work-path /var/lib/gitea 2>/dev/null | grep -q "$GITEA_ADMIN_USER"; then
         print_info "Администратор существует"
         log_info "Admin exists"
     else
@@ -393,6 +393,7 @@ else
             --username "$GITEA_ADMIN_USER" \
             --password "$GITEA_ADMIN_PASSWORD" \
             --email "$GITEA_ADMIN_EMAIL" \
+            --work-path /var/lib/gitea \
             --admin \
             --config /etc/gitea/app.ini || {
             print_error "Не удалось создать администратора"
