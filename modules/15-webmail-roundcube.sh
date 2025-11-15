@@ -187,6 +187,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
 \$config['skin'] = 'elastic';
 \$config['language'] = 'ru_RU';
 \$config['spellcheck_engine'] = 'pspell';
+\$config['username_domain'] = '$DOMAIN';
 
 // Дополнительные настройки
 \$config['debug_level'] = 1;
