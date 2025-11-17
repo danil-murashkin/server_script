@@ -162,6 +162,17 @@ else
     log_warn "Roundcube not found"
 fi
 
+# NextCloud
+if [[ "${ENABLE_NEXTCLOUD:-false}" == "true" ]]; then
+    if [[ -d "/var/www/nextcloud" ]] && [[ -f "/var/www/nextcloud/occ" ]]; then
+        CONFIGS_OK+=("NextCloud установлен")
+        log_info "NextCloud installed"
+    else
+        CONFIGS_FAIL+=("NextCloud установлен")
+        log_warn "NextCloud not found"
+    fi
+fi
+
 # --- Проверка DNS записей ---
 print_step "Проверка DNS записей"
 
@@ -288,6 +299,16 @@ if ss -tlnp | grep -q ":443 "; then
     print_info "  https://webmail.$DOMAIN"
 fi
 
+if [[ "${ENABLE_NEXTCLOUD:-false}" == "true" ]]; then
+    NEXTCLOUD_DOMAIN="${NEXTCLOUD_SUBDOMAIN:-cloud}.$DOMAIN"
+    print_info ""
+    print_info "Облачное хранилище (NextCloud):"
+    print_info "  http://$NEXTCLOUD_DOMAIN"
+    if ss -tlnp | grep -q ":443 "; then
+        print_info "  https://$NEXTCLOUD_DOMAIN"
+    fi
+fi
+
 print_section "УЧЕТНЫЕ ДАННЫЕ"
 
 print_info "Администратор PostfixAdmin:"
@@ -305,13 +326,12 @@ print_info "  Пользователь: $ADMIN_USER"
 print_info "  База: ${DOMAIN//./_}"
 print_info "  Пароль: ADMIN_PASSWORD"
 
-# Тестовый почтовый ящик
-if PGPASSWORD="$ADMIN_PASSWORD" psql -h localhost -U "$ADMIN_USER" -d "${DOMAIN//./_}" \
-   -tAc "SELECT COUNT(*) FROM mailbox WHERE username='test@$DOMAIN';" 2>/dev/null | grep -q "1"; then
+if [[ "${ENABLE_NEXTCLOUD:-false}" == "true" ]]; then
     print_info ""
-    print_info "Тестовый почтовый ящик:"
-    print_info "  Email: test@$DOMAIN"
-    print_info "  Пароль: test123"
+    print_info "NextCloud:"
+    print_info "  Логин: ${NEXTCLOUD_ADMIN_USER:-admin}"
+    print_info "  Пароль: ADMIN_PASSWORD"
+    print_info "  Данные: ${NEXTCLOUD_DATA_DIR:-/var/www/nextcloud-data}"
 fi
 
 print_section "НАСТРОЙКА ПОЧТОВОГО КЛИЕНТА"
@@ -412,6 +432,17 @@ print_info "  $LOG_FILE"
     if ss -tlnp | grep -q ":443 "; then
         echo "  https://webmail.$DOMAIN"
     fi
+    
+    if [[ "${ENABLE_NEXTCLOUD:-false}" == "true" ]]; then
+        NEXTCLOUD_DOMAIN="${NEXTCLOUD_SUBDOMAIN:-cloud}.$DOMAIN"
+        echo ""
+        echo "Облачное хранилище (NextCloud):"
+        echo "  http://$NEXTCLOUD_DOMAIN"
+        if ss -tlnp | grep -q ":443 "; then
+            echo "  https://$NEXTCLOUD_DOMAIN"
+        fi
+    fi
+    
     echo ""
     echo "УЧЕТНЫЕ ДАННЫЕ"
     echo ""
@@ -427,6 +458,14 @@ print_info "  $LOG_FILE"
     echo "  Пользователь: $ADMIN_USER"
     echo "  База: ${DOMAIN//./_}"
     echo "  Пароль: ADMIN_PASSWORD"
+    
+    if [[ "${ENABLE_NEXTCLOUD:-false}" == "true" ]]; then
+        echo ""
+        echo "NextCloud:"
+        echo "  Логин: ${NEXTCLOUD_ADMIN_USER:-admin}"
+        echo "  Пароль: ADMIN_PASSWORD"
+        echo "  Данные: ${NEXTCLOUD_DATA_DIR:-/var/www/nextcloud-data}"
+    fi
     
     if PGPASSWORD="$ADMIN_PASSWORD" psql -h localhost -U "$ADMIN_USER" -d "${DOMAIN//./_}" \
        -tAc "SELECT COUNT(*) FROM mailbox WHERE username='test@$DOMAIN';" 2>/dev/null | grep -q "1"; then

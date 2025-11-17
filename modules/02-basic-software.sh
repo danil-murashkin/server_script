@@ -49,6 +49,7 @@ essential_tools=(
     perl
     gnupg
     unzip
+    redis-server
 )
 
 tools_str="${essential_tools[*]}"
