@@ -12,10 +12,17 @@ source "$UTILS_DIR/logging.sh"
 CONFIG_FILE="$CONFIG_DIR/main.conf"
 DRY_RUN=false
 DEBUG_MODE=false
-QUIET_MODE=false
+BACKGROUND_MODE=false
 FORCE_MODE=false
 CUSTOM_MODULES=""
 SKIP_MODULES=""
+NO_DETACH=false
+
+# Флаги для отслеживания, были ли параметры переданы через командную строку
+ARG_DEBUG=false
+ARG_BACKGROUND=false
+ARG_DRY_RUN=false
+ARG_FORCE=false
 
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -23,12 +30,42 @@ parse_args() {
             --config=*) CONFIG_FILE="${1#*=}" ;;
             --modules=*) CUSTOM_MODULES="${1#*=}" ;;
             --skip=*) SKIP_MODULES="${1#*=}" ;;
-            --debug) DEBUG_MODE=true ;;
-            --quiet) QUIET_MODE=true ;;
-            --dry-run) DRY_RUN=true ;;
-            --force) FORCE_MODE=true ;;
+            --debug) DEBUG_MODE=true; ARG_DEBUG=true ;;
+            --background) BACKGROUND_MODE=true; ARG_BACKGROUND=true ;;
+            --dry-run) DRY_RUN=true; ARG_DRY_RUN=true ;;
+            --force) FORCE_MODE=true; ARG_FORCE=true ;;
+            --no-detach) NO_DETACH=true ;;
             --help|-h)
-                echo "Использование: $0 [опции]"
+                cat << EOF
+Использование: $0 [опции]
+
+Опции:
+  --config=FILE     Путь к конфигурационному файлу (по умолчанию: $CONFIG_FILE)
+  --modules=LIST    Список модулей для установки (через запятую)
+  --skip=LIST       Список модулей для пропуска (через запятую)
+  --debug           Включить режим отладки (DEBUG уровень логирования)
+  --background      Фоновая установка - запуск в фоне с полным логированием
+  --dry-run         Режим проверки без выполнения изменений
+  --force           Принудительная установка (игнорировать предупреждения)
+  --help, -h        Показать эту справку
+
+Примеры:
+  $0                                    # Обычная установка
+  $0 --background                       # Фоновая установка с логированием
+  $0 --modules=dns,nginx,postfix        # Установка только указанных модулей
+  $0 --skip=vpn-wireguard,git-gitea     # Пропустить указанные модули
+  $0 --debug                            # Установка с отладочным выводом
+  $0 --dry-run                          # Проверка без изменений
+
+При фоновой установке (--background):
+  - Процесс запускается в фоне через nohup
+  - Весь вывод сохраняется в логи
+  - Можно закрыть терминал, установка продолжится
+  - Логи: \$LOG_DIR/\$LOG_FILE и \$LOG_DIR/\$CONSOLE_LOG_FILE
+
+Просмотр логов в реальном времени:
+  tail -f /var/log/server-installer/server-script-console.log
+EOF
                 exit 0
                 ;;
             *) print_error "Неизвестный аргумент: $1"; exit 1 ;;
@@ -42,13 +79,14 @@ initialize() {
     ensure_root
     ensure_debian
 
-    [[ "$QUIET_MODE" == "true" ]] && enable_quiet_mode
-    [[ "$DEBUG_MODE" == "true" ]] && set_log_level "DEBUG"
-
-
-
     # === ВАЖНО: load_config ДО init_logging ===
     load_config "$CONFIG_FILE"
+
+    # Применение параметров из конфига (если не переопределены через командную строку)
+    [[ "$ARG_DEBUG" == "false" ]] && DEBUG_MODE="${DEBUG_MODE:-false}"
+    [[ "$ARG_BACKGROUND" == "false" ]] && BACKGROUND_MODE="${BACKGROUND_MODE:-false}"
+    [[ "$ARG_DRY_RUN" == "false" ]] && DRY_RUN="${DRY_RUN:-false}"
+    [[ "$ARG_FORCE" == "false" ]] && FORCE_MODE="${FORCE_MODE:-false}"
 
     # Проверка и дополнение конфигурационного файла ДО его загрузки
     if [[ -f "$CONFIG_FILE" ]]; then
@@ -120,10 +158,14 @@ initialize() {
 
     [[ -z "$SKIP_MODULES" ]] && SKIP_MODULES="${SKIP_MODULES:-}"
 
+    # Установка уровня логирования
+    [[ "$DEBUG_MODE" == "true" ]] && set_log_level "DEBUG"
+
     # Теперь LOG_FILE и LOG_LEVEL из main.conf доступны
     init_logging
 
     log_info "Установка начата"
+    [[ "$BACKGROUND_MODE" == "true" ]] && log_info "Режим: фоновая установка"
 }
 
 get_modules() {
@@ -164,6 +206,7 @@ run_installation() {
                 log_error "Ошибка модуля: $module"
                 if [[ "$FORCE_MODE" != "true" ]]; then
                     print_error "Установка прервана"
+                    cleanup_on_exit
                     exit 1
                 fi
             fi
@@ -174,10 +217,77 @@ run_installation() {
     print_info "Выполнено: $executed, Пропущено: $skipped"
     [[ "$DRY_RUN" == "true" ]] && print_warning "Это был dry-run"
     print_success "Сервер развёрнут!"
+    
+    # Добавляем пустые строки в оба лога для читаемости
+    print_empty_line
+    print_empty_line
+    print_empty_line
+    print_empty_line
+    
+    cleanup_on_exit
+}
+
+cleanup_on_exit() {
+    # Удаление файла блокировки фонового процесса
+    rm -f /tmp/installer_bg_running 2>/dev/null || true
+    
+    log_info "Установка завершена $(date '+%Y-%m-%d %H:%M:%S')"
+
+    log_empty_line
+    log_empty_line
+    log_empty_line
+    log_empty_line
 }
 
 main() {
+    # Сохранение оригинальных аргументов для перезапуска в фоне
+    ORIGINAL_ARGS=("$@")
+    
     parse_args "$@"
+    
+    # Обработка фонового режима СРАЗУ после parse_args, ДО initialize
+    if [[ "$BACKGROUND_MODE" == "true" ]] && [[ "$NO_DETACH" == "false" ]]; then
+        # Проверка, не запущен ли уже процесс установки
+        if [[ -f "/tmp/installer_bg_running" ]]; then
+            print_error "Установка уже запущена в фоновом режиме"
+            print_info "PID: $(cat /tmp/installer_bg_running 2>/dev/null || echo 'неизвестен')"
+            exit 1
+        fi
+        
+        # Загружаем конфиг для получения LOG_DIR
+        [[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE" 2>/dev/null || true
+        
+        echo ""
+        print_info "Запуск установки в фоновом режиме..."
+        print_info "Лог событий: ${LOG_DIR:-.}/${LOG_FILE:-server-script-install.log}"
+        print_info "Лог консоли: ${LOG_DIR:-.}/${CONSOLE_LOG_FILE:-server-script-console.log}"
+        echo ""
+        print_info "Для просмотра логов в реальном времени используйте:"
+        print_step "tail -f ${LOG_DIR:-.}/${CONSOLE_LOG_FILE:-server-script-console.log}"
+        echo ""
+        
+        # Создаём директорию для логов
+        [[ -n "${LOG_DIR}" ]] && mkdir -p "${LOG_DIR}" 2>/dev/null || true
+        
+        # Запуск в фоне с nohup
+        touch /tmp/installer_bg_running
+        nohup "$0" "${ORIGINAL_ARGS[@]}" --no-detach </dev/null >/dev/null 2>&1 &
+        BACKGROUND_PID=$!
+        echo "$BACKGROUND_PID" > /tmp/installer_bg_running
+        
+        print_success "Установка запущена в фоне (PID: $BACKGROUND_PID)"
+        print_info "Вы можете закрыть эту сессию, установка продолжится в фоне"
+        echo ""
+        
+        exit 0
+    fi
+    
+    # При --no-detach принудительно включаем логирование в файлы
+    if [[ "$NO_DETACH" == "true" ]]; then
+        export ENABLE_LOG_FILE=true
+        export ENABLE_CONSOLE_LOG=true
+    fi
+    
     initialize
     run_installation
 }

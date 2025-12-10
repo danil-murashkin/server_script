@@ -5,6 +5,11 @@
 
 UTIL_PRINT_LOADED=true
 
+# Значения по умолчанию для консольного лога
+: "${LOG_DIR:=/var/log/server-installer}"
+: "${CONSOLE_LOG_FILE:=server-script-console.log}"
+: "${ENABLE_CONSOLE_LOG:=false}"
+
 # ANSI цветовые коды
 declare -A COLORS=(
     # Основные цвета
@@ -59,6 +64,25 @@ get_color() {
     fi
 }
 
+# Запись в консольный лог (без цветов)
+_write_console_log() {
+    [[ "${ENABLE_CONSOLE_LOG:-false}" != "true" ]] && return 0
+    
+    local message="$1"
+    local console_path
+    
+    if [[ -z "${LOG_DIR}" ]]; then
+        console_path="${CONSOLE_LOG_FILE}"
+    else
+        console_path="${LOG_DIR}/${CONSOLE_LOG_FILE}"
+        [[ ! -d "${LOG_DIR}" ]] && mkdir -p "${LOG_DIR}" 2>/dev/null || true
+    fi
+    
+    # Удаление ANSI escape-последовательностей для чистого текста
+    local clean_message=$(echo -e "$message" | sed 's/\x1b\[[0-9;]*m//g')
+    echo "$clean_message" >> "$console_path" 2>/dev/null || true
+}
+
 # Функция для цветного вывода
 print_color() {
     local color="$1"
@@ -67,46 +91,70 @@ print_color() {
     
     if [[ "$USE_COLORS" == "true" ]] && supports_color; then
         echo -e "${COLORS[$color]:-}${message}${COLORS[RESET]}"
+        _write_console_log "${COLORS[$color]:-}${message}${COLORS[RESET]}"
     else
         echo "$message"
+        _write_console_log "$message"
     fi
 }
 
 # Предопределенные функции для часто используемых цветов
 print_success() {
-    print_color "BRIGHT_GREEN" "✅ $*"
+    local msg="✅ $*"
+    print_color "BRIGHT_GREEN" "$msg"
 }
 
 print_error() {
-    print_color "BRIGHT_RED" "❌ $*"
+    local msg="❌ $*"
+    print_color "BRIGHT_RED" "$msg"
 }
 
 print_warning() {
-    print_color "BRIGHT_YELLOW" "⚠️  $*"
+    local msg="⚠️  $*"
+    print_color "BRIGHT_YELLOW" "$msg"
 }
 
 print_info() {
-    print_color "BRIGHT_BLUE" "ℹ️  $*"
+    local msg="ℹ️  $*"
+    print_color "BRIGHT_BLUE" "$msg"
 }
 
 print_debug() {
-    print_color "DIM" "🔍 DEBUG: $*"
+    local msg="🔍 DEBUG: $*"
+    print_color "DIM" "$msg"
 }
 
 print_header() {
-    print_color "BOLD" "
+    local msg="
 ================================================================================
 $*
 ================================================================================"
+    print_color "BOLD" "$msg"
 }
 
 print_section() {
-    print_color "BRIGHT_CYAN" "
+    local msg="
 --- $* ---"
+    print_color "BRIGHT_CYAN" "$msg"
 }
 
 print_step() {
-    print_color "PURPLE" "➤ $*"
+    local msg="➤ $*"
+    print_color "PURPLE" "$msg"
+}
+
+# Функция для записи пустой строки в консольный лог
+print_empty_line() {
+    echo ""
+    [[ "${ENABLE_CONSOLE_LOG:-false}" != "true" ]] && return 0
+    
+    local console_path
+    if [[ -z "${LOG_DIR}" ]]; then
+        console_path="${CONSOLE_LOG_FILE}"
+    else
+        console_path="${LOG_DIR}/${CONSOLE_LOG_FILE}"
+    fi
+    echo "" >> "$console_path" 2>/dev/null || true
 }
 
 # Функция для прогресс-бара
@@ -126,11 +174,13 @@ print_progress() {
         bar+="░"
     done
     
-    printf "\r${COLORS[BRIGHT_BLUE]}Progress: [%s] %d%% (%d/%d)${COLORS[RESET]}" \
-        "$bar" "$percentage" "$current" "$total"
+    local msg="Progress: [$bar] $percentage% ($current/$total)"
+    printf "\r${COLORS[BRIGHT_BLUE]}%s${COLORS[RESET]}" "$msg"
+    _write_console_log "$msg"
     
     if [[ "$current" -eq "$total" ]]; then
         echo ""
+        _write_console_log ""
     fi
 }
 
@@ -155,23 +205,6 @@ print_timestamp() {
     local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
     
     print_color "$color" "[$timestamp] $message"
-}
-
-# Функции для логирования с временными метками
-log_success() {
-    print_timestamp "BRIGHT_GREEN" "✅ SUCCESS: $*"
-}
-
-log_error() {
-    print_timestamp "BRIGHT_RED" "❌ ERROR: $*"
-}
-
-log_warning() {
-    print_timestamp "BRIGHT_YELLOW" "⚠️  WARNING: $*"
-}
-
-log_info() {
-    print_timestamp "BRIGHT_BLUE" "ℹ️  INFO: $*"
 }
 
 # Функция для вывода статуса операции
@@ -225,65 +258,3 @@ disable_colors() {
 enable_colors() {
     USE_COLORS=true
 }
-
-# Функция для демонстрации всех цветов
-show_colors() {
-    echo "Демонстрация цветов:"
-    echo
-    
-    for color in "${!COLORS[@]}"; do
-        if [[ "$color" != "RESET" && "$color" != "NC" ]]; then
-            print_color "$color" "$color: Пример текста"
-        fi
-    done
-    
-    echo
-    echo "Предопределенные функции:"
-    print_success "Успешное выполнение"
-    print_error "Ошибка выполнения"
-    print_warning "Предупреждение"
-    print_info "Информация"
-    print_debug "Отладочная информация"
-    print_step "Шаг выполнения"
-    
-    print_header "Заголовок раздела"
-    print_section "Подраздел"
-    print_separator
-    
-    print_status "OK" "Операция выполнена успешно"
-    print_status "ERROR" "Произошла ошибка"
-    print_status "WARN" "Внимание"
-    
-    echo
-    echo "Прогресс-бар:"
-    for i in {1..10}; do
-        print_progress "$i" 10
-        sleep 0.1
-    done
-}
-
-# Если скрипт запущен напрямую, показать демонстрацию
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    case "${1:-}" in
-        "demo"|"show"|"test")
-            show_colors
-            ;;
-        "disable")
-            echo "Цвета отключены"
-            disable_colors
-            ;;
-        "enable")
-            echo "Цвета включены"
-            enable_colors
-            ;;
-        *)
-            echo "Использование: $0 [demo|show|test|enable|disable]"
-            echo "  demo/show/test - показать демонстрацию цветов"
-            echo "  enable         - включить цвета"
-            echo "  disable        - отключить цвета"
-            echo
-            echo "Или подключите как библиотеку:"
-            echo "  source $0"
-            ;;
-    esac
-fi

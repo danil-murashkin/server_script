@@ -18,6 +18,13 @@ load_config || {
     [[ "$FORCE_MODE" != "true" ]] && exit 1
 }
 
+# --- Проверка включения модуля ---
+if [[ "${ENABLE_VPN:-false}" != "true" ]]; then
+    print_warning "VPN WireGuard отключен в конфигурации (ENABLE_VPN=false)"
+    log_info "VPN WireGuard installation skipped (ENABLE_VPN=false)"
+    exit 0
+fi
+
 # --- Проверка переменных ---
 print_step "Проверка конфигурации VPN-сервера"
 

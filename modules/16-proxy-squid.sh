@@ -18,6 +18,13 @@ load_config || {
     [[ "$FORCE_MODE" != "true" ]] && exit 1
 }
 
+# --- Проверка включения модуля ---
+if [[ "${ENABLE_PROXY:-false}" != "true" ]]; then
+    print_warning "Proxy Squid отключен в конфигурации (ENABLE_PROXY=false)"
+    log_info "Proxy Squid installation skipped (ENABLE_PROXY=false)"
+    exit 0
+fi
+
 # --- Проверка переменных ---
 print_step "Проверка конфигурации прокси-сервера"
 

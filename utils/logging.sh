@@ -10,28 +10,40 @@ fi
 UTIL_LOGGING_LOADED=true
 
 # Значения по умолчанию (если не заданы в конфиге)
-: "${LOG_FILE:=${HOME:-/root}/server-installer.log}"
+: "${LOG_DIR:=/var/log/server-installer}"
+: "${LOG_FILE:=server-script-install.log}"
 : "${LOG_LEVEL:=INFO}"
-: "${QUIET_MODE:=false}"
-
-
+: "${ENABLE_LOG_FILE:=true}"
 
 init_logging() {
+    [[ "${ENABLE_LOG_FILE}" != "true" ]] && return 0
+    
+    local log_path
+    if [[ -z "${LOG_DIR}" ]]; then
+        log_path="${LOG_FILE}"
+    else
+        log_path="${LOG_DIR}/${LOG_FILE}"
+        [[ ! -d "${LOG_DIR}" ]] && mkdir -p "${LOG_DIR}" 2>/dev/null || true
+    fi
+    
     {
         echo "========================================"
         echo "Server Installer Log"
         echo "Start time: $(date '+%Y-%m-%d %H:%M:%S')"
         echo "Log level: $LOG_LEVEL"
-        echo "Quiet mode: $QUIET_MODE"
         echo "========================================"
-    } >> "$LOG_FILE" 2>/dev/null || true
+    } >> "$log_path" 2>/dev/null || true
 
-    log_info "Логирование инициализировано"
+    _write_log "INFO" "Логирование инициализировано"
 }
 
 _write_log() {
     local level="$1"
     local message="$2"
+    
+    # Проверка включено ли логирование
+    [[ "${ENABLE_LOG_FILE:-true}" != "true" ]] && return 0
+    
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 
     # Проверка уровня
@@ -49,8 +61,14 @@ _write_log() {
     done
 
     if [[ "$log_enabled" == "true" ]]; then
-        # ⚠️ Никакого вывода в консоль!
-        printf "[%s] [%-7s] %s\n" "$timestamp" "$level" "$message" >> "$LOG_FILE" 2>/dev/null || true
+        local log_path
+        if [[ -z "${LOG_DIR}" ]]; then
+            log_path="${LOG_FILE}"
+        else
+            log_path="${LOG_DIR}/${LOG_FILE}"
+            [[ ! -d "${LOG_DIR}" ]] && mkdir -p "${LOG_DIR}" 2>/dev/null || true
+        fi
+        printf "[%s] [%-7s] %s\n" "$timestamp" "$level" "$message" >> "$log_path" 2>/dev/null || true
     fi
 }
 
@@ -60,18 +78,27 @@ log_warning() { _write_log "WARN"    "$*"; }
 log_error()   { _write_log "ERROR"   "$*"; }
 log_debug()   { [[ "$LOG_LEVEL" == "DEBUG" ]] && _write_log "DEBUG" "$*"; }
 
+# Функция для записи пустой строки в лог событий
+log_empty_line() {
+    [[ "${ENABLE_LOG_FILE:-true}" != "true" ]] && return 0
+    local log_path
+    if [[ -z "${LOG_DIR}" ]]; then
+        log_path="${LOG_FILE}"
+    else
+        log_path="${LOG_DIR}/${LOG_FILE}"
+    fi
+    echo "" >> "$log_path" 2>/dev/null || true
+}
+
 set_log_level() {
     case "${1^^}" in
         "DEBUG"|"INFO"|"WARN"|"WARNING"|"ERROR")
             LOG_LEVEL="${1^^}"
             [[ "$LOG_LEVEL" == "WARNING" ]] && LOG_LEVEL="WARN"
-            log_info "Уровень логирования: $LOG_LEVEL"
+            _write_log "INFO" "Уровень логирования: $LOG_LEVEL"
             ;;
     esac
 }
-
-enable_quiet_mode() { QUIET_MODE=true; log_info "Тихий режим включён"; }
-disable_quiet_mode(){ QUIET_MODE=false; }
 
 log_module_start() {
     print_header "Запуск модуля: $1"
