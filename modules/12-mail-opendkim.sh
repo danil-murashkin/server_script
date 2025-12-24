@@ -17,6 +17,13 @@ load_config || {
     [[ "$FORCE_MODE" != "true" ]] && exit 1
 }
 
+# --- Проверка включения модуля ---
+if [[ "${ENABLE_MAIL:-true}" != "true" ]]; then
+    print_warning "Почтовый сервер отключен в конфигурации (ENABLE_MAIL=false)"
+    log_info "Mail server installation skipped (ENABLE_MAIL=false)"
+    exit 0
+fi
+
 # --- Проверка переменных ---
 print_step "Проверка необходимых переменных: DOMAIN, SERVER_IP, ADMIN_EMAIL"
 for var in DOMAIN SERVER_IP ADMIN_EMAIL; do

@@ -17,6 +17,13 @@ load_config || {
     [[ "$FORCE_MODE" != "true" ]] && exit 1
 }
 
+# --- Проверка включения модуля ---
+if [[ "${ENABLE_MAIL:-true}" != "true" ]]; then
+    print_warning "Почтовый сервер отключен в конфигурации (ENABLE_MAIL=false)"
+    log_info "Mail server installation skipped (ENABLE_MAIL=false)"
+    exit 0
+fi
+
 # --- Проверка обязательных переменных ---
 for var in DOMAIN ADMIN_EMAIL ADMIN_PASSWORD ROUNDCUBE_DB_NAME ROUNDCUBE_DB_USER ROUNDCUBE_DB_PASSWORD; do
     if [[ -z "${!var}" ]]; then
