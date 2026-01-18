@@ -85,39 +85,194 @@ fi
 case "$SSL_PROVIDER" in
     "letsencrypt")
         log_info "Настройка Let's Encrypt (Certbot)"
+        
+        # Устанавливаем certbot с плагином для NGINX
         if ! command -v certbot &> /dev/null; then
-            apt -y install certbot > /dev/null 2>&1 && \
-                log_success "Certbot установлен" || \
+            log_info "Установка certbot и python3-certbot-nginx..."
+            apt -y install certbot python3-certbot-nginx > /dev/null 2>&1 && \
+                log_success "Certbot и плагин для NGINX установлены" || \
                 log_warn "Не удалось установить certbot"
         else
             log_info "Certbot уже установлен"
         fi
+        
+        # Проверка наличия автопродления
+        if systemctl list-timers 2>/dev/null | grep -q certbot.timer; then
+            log_info "Автопродление Let's Encrypt настроено (systemd timer)"
+        elif [[ -f /etc/cron.d/certbot ]]; then
+            log_info "Автопродление Let's Encrypt настроено (cron)"
+        else
+            log_info "Автопродление будет настроено автоматически при первом получении сертификата"
+        fi
         ;;
+        
     "self-signed")
-        log_info "Генерация самоподписанного SSL-сертификата"
+        log_info "Генерация самоподписанного SSL-сертификата с SAN"
         local cert_dir="/etc/ssl/self-signed"
         safe_mkdir "$cert_dir" "root:root" "755"
 
         local key="$cert_dir/server.key"
         local crt="$cert_dir/server.crt"
-        local days=365
+        local days=3650  # 10 лет вместо 1 года
+        
+        # Создаем временный конфиг OpenSSL с поддержкой SAN (Subject Alternative Names)
+        # для всех поддоменов и IP адреса
+        local openssl_cnf="/tmp/openssl-san.cnf"
+        cat > "$openssl_cnf" <<EOF
+[req]
+default_bits = 2048
+prompt = no
+default_md = sha256
+distinguished_name = dn
+req_extensions = v3_req
 
+[dn]
+C=RU
+ST=Default
+L=Default
+O=Default
+CN=${DOMAIN:-localhost}
+
+[v3_req]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = ${DOMAIN:-localhost}
+DNS.2 = www.${DOMAIN:-localhost}
+DNS.3 = mail.${DOMAIN:-localhost}
+DNS.4 = mailadmin.${DOMAIN:-localhost}
+DNS.5 = webmail.${DOMAIN:-localhost}
+DNS.6 = git.${DOMAIN:-localhost}
+DNS.7 = cloud.${DOMAIN:-localhost}
+DNS.8 = proxy.${DOMAIN:-localhost}
+DNS.9 = vpn.${DOMAIN:-localhost}
+IP.1 = ${SERVER_IP:-127.0.0.1}
+EOF
+
+        # Генерируем сертификат с SAN
         if openssl req -x509 -nodes -days "$days" \
             -newkey rsa:2048 \
             -keyout "$key" \
             -out "$crt" \
-            -subj "/C=RU/ST=Default/L=Default/O=Default/CN=${DOMAIN:-localhost}" > /dev/null 2>&1; then
+            -config "$openssl_cnf" \
+            -extensions v3_req > /dev/null 2>&1; then
+            
             chown root:root "$key" "$crt"
             chmod 600 "$key"
             chmod 644 "$crt"
+            rm -f "$openssl_cnf"
+            
             log_success "Самоподписанный сертификат создан: $crt"
+            log_info "Сертификат включает SAN для всех поддоменов и IP: ${SERVER_IP:-127.0.0.1}"
+            log_info "Срок действия: 10 лет (${days} дней)"
         else
             log_error "Не удалось сгенерировать самоподписанный сертификат"
+            rm -f "$openssl_cnf"
             exit 1
         fi
         ;;
+        
+    "custom")
+        log_info "Настройка пользовательских SSL-сертификатов"
+        
+        # Проверка обязательных параметров
+        if [[ -z "$SSL_CUSTOM_CERT_PATH" ]] || [[ -z "$SSL_CUSTOM_KEY_PATH" ]]; then
+            log_error "Не указаны пути к сертификатам"
+            log_error "Установите SSL_CUSTOM_CERT_PATH и SSL_CUSTOM_KEY_PATH в main.conf"
+            exit 1
+        fi
+        
+        # Проверка существования файлов
+        if [[ ! -f "$SSL_CUSTOM_CERT_PATH" ]]; then
+            log_error "Файл сертификата не найден: $SSL_CUSTOM_CERT_PATH"
+            exit 1
+        fi
+        
+        if [[ ! -f "$SSL_CUSTOM_KEY_PATH" ]]; then
+            log_error "Файл приватного ключа не найден: $SSL_CUSTOM_KEY_PATH"
+            exit 1
+        fi
+        
+        # Создание директории для хранения сертификатов
+        local cert_dir="${SSL_CUSTOM_DIR:-/etc/ssl/custom}"
+        safe_mkdir "$cert_dir" "root:root" "755"
+        
+        log_info "Копирование сертификатов в $cert_dir"
+        
+        # Копирование сертификата
+        if cp "$SSL_CUSTOM_CERT_PATH" "$cert_dir/cert.pem" && chmod 644 "$cert_dir/cert.pem"; then
+            log_success "Сертификат скопирован: $cert_dir/cert.pem"
+        else
+            log_error "Не удалось скопировать сертификат"
+            exit 1
+        fi
+        
+        # Копирование приватного ключа
+        if cp "$SSL_CUSTOM_KEY_PATH" "$cert_dir/privkey.pem" && chmod 600 "$cert_dir/privkey.pem"; then
+            log_success "Приватный ключ скопирован: $cert_dir/privkey.pem"
+        else
+            log_error "Не удалось скопировать приватный ключ"
+            exit 1
+        fi
+        
+        # Копирование цепочки сертификатов (если указана)
+        if [[ -n "$SSL_CUSTOM_CHAIN_PATH" ]] && [[ -f "$SSL_CUSTOM_CHAIN_PATH" ]]; then
+            if cp "$SSL_CUSTOM_CHAIN_PATH" "$cert_dir/chain.pem" && chmod 644 "$cert_dir/chain.pem"; then
+                log_success "Цепочка сертификатов скопирована: $cert_dir/chain.pem"
+                
+                # Создаем fullchain (сертификат + цепочка)
+                cat "$cert_dir/cert.pem" "$cert_dir/chain.pem" > "$cert_dir/fullchain.pem"
+                chmod 644 "$cert_dir/fullchain.pem"
+                log_success "Создан fullchain.pem (сертификат + цепочка)"
+            else
+                log_error "Не удалось скопировать цепочку сертификатов"
+                exit 1
+            fi
+        else
+            log_info "Цепочка сертификатов не указана"
+            # Если цепочки нет - fullchain = cert
+            cp "$cert_dir/cert.pem" "$cert_dir/fullchain.pem"
+            chmod 644 "$cert_dir/fullchain.pem"
+            log_info "fullchain.pem = cert.pem (без цепочки)"
+        fi
+        
+        # Валидация сертификата
+        log_info "Проверка валидности сертификата..."
+        if openssl x509 -in "$cert_dir/cert.pem" -noout -text > /dev/null 2>&1; then
+            log_success "Сертификат валиден"
+            
+            # Показываем информацию о сертификате
+            local cert_cn=$(openssl x509 -in "$cert_dir/cert.pem" -noout -subject | sed 's/.*CN *= *//')
+            local cert_issuer=$(openssl x509 -in "$cert_dir/cert.pem" -noout -issuer | sed 's/.*CN *= *//')
+            local cert_expires=$(openssl x509 -in "$cert_dir/cert.pem" -noout -enddate | sed 's/notAfter=//')
+            
+            log_info "Информация о сертификате:"
+            log_info "  CN (Common Name): $cert_cn"
+            log_info "  Издатель: $cert_issuer"
+            log_info "  Истекает: $cert_expires"
+        else
+            log_error "Сертификат невалиден или поврежден"
+            exit 1
+        fi
+        
+        # Проверка соответствия ключа и сертификата
+        log_info "Проверка соответствия ключа и сертификата..."
+        local cert_modulus=$(openssl x509 -noout -modulus -in "$cert_dir/cert.pem" 2>/dev/null | openssl md5 2>/dev/null)
+        local key_modulus=$(openssl rsa -noout -modulus -in "$cert_dir/privkey.pem" 2>/dev/null | openssl md5 2>/dev/null)
+        
+        if [[ -n "$cert_modulus" ]] && [[ "$cert_modulus" == "$key_modulus" ]]; then
+            log_success "Ключ и сертификат соответствуют друг другу"
+        else
+            log_error "Ключ и сертификат НЕ соответствуют друг другу!"
+            log_error "Убедитесь что вы указали правильную пару сертификат+ключ"
+            exit 1
+        fi
+        
+        log_success "Пользовательские SSL-сертификаты успешно настроены"
+        ;;
+        
     *)
-        log_warn "Неизвестный провайдер SSL: $SSL_PROVIDER — пропуск"
+        log_warn "Неизвестный провайдер SSL: $SSL_PROVIDER — пропуск настройки SSL"
         ;;
 esac
 

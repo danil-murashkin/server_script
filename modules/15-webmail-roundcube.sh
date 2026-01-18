@@ -235,36 +235,57 @@ fi
 # --- 5. Настройка NGINX ---
 NGINX_SITE="/etc/nginx/sites-available/${ROUNDCUBE_SUBDOMAIN:-webmail}.$DOMAIN"
 NGINX_LINK="/etc/nginx/sites-enabled/${ROUNDCUBE_SUBDOMAIN:-webmail}.$DOMAIN"
+ROUNDCUBE_FULL_DOMAIN="${ROUNDCUBE_SUBDOMAIN:-webmail}.$DOMAIN"
 
 if [[ "$DRY_RUN" != "true" ]]; then
-    print_info "Настройка NGINX для ${ROUNDCUBE_SUBDOMAIN:-webmail}.$DOMAIN..."
+    print_info "Настройка NGINX для $ROUNDCUBE_FULL_DOMAIN..."
 
+    # Создаем базовую HTTP конфигурацию
     cat > "$NGINX_SITE" <<EOF
+# HTTP сервер для Roundcube
 server {
     listen 80;
-    server_name ${ROUNDCUBE_SUBDOMAIN:-webmail}.$DOMAIN;
+    server_name $ROUNDCUBE_FULL_DOMAIN;
     root $ROUNDCUBE_DIR;
     index index.php;
 
     access_log /var/log/nginx/roundcube.access.log;
     error_log /var/log/nginx/roundcube.error.log;
 
+    # Разрешаем доступ к .well-known для Let's Encrypt
+    location ^~ /.well-known/acme-challenge/ {
+        allow all;
+        root $ROUNDCUBE_DIR;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+
+    # Максимальный размер загружаемых файлов (для вложений)
+    client_max_body_size 50M;
+
     location / {
         try_files \$uri \$uri/ /index.php?\$args;
     }
 
-    location ~ \.php$ {
+    location ~ \.php\$ {
         include snippets/fastcgi-php.conf;
         fastcgi_pass unix:/run/php/php8.2-fpm.sock;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
     }
 
+    # Запретить доступ к скрытым файлам и директориям
     location ~ /\. {
         deny all;
     }
 
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
+    # Запретить доступ к конфигурационным директориям
+    location ~ ^/(config|temp|logs|SQL|bin|program)/ {
+        deny all;
+    }
+
+    # Кэширование статических файлов
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
         access_log off;
@@ -279,29 +300,135 @@ EOF
         [[ "$FORCE_MODE" != "true" ]] && exit 1
     }
     systemctl reload nginx
-    log_info "Nginx configured for ${ROUNDCUBE_SUBDOMAIN:-webmail}.$DOMAIN"
+    log_info "Nginx HTTP configuration created for $ROUNDCUBE_FULL_DOMAIN"
 else
     print_info "[DRY RUN] Пропуск настройки NGINX"
 fi
 
 # --- 6. SSL ---
-if [[ "$SSL_PROVIDER" == "letsencrypt" ]] && [[ "$DRY_RUN" != "true" ]]; then
-    print_info "Получение SSL-сертификата от Let's Encrypt..."
-    require_command "certbot" "Let's Encrypt client"
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ "$DRY_RUN" != "true" ]]; then
+    print_section "🔒 НАСТРОЙКА SSL ДЛЯ ROUNDCUBE"
     
-    if certbot --nginx -n -d "${ROUNDCUBE_SUBDOMAIN:-webmail}.$DOMAIN" --email "$ADMIN_EMAIL" --agree-tos --redirect --non-interactive >/dev/null 2>&1; then
-        print_info "SSL-сертификат получен"
-        log_info "Let's Encrypt certificate obtained"
+    # Получаем SSL сертификат
+    setup_ssl_certificate "$ROUNDCUBE_FULL_DOMAIN" "$ROUNDCUBE_DIR"
+    SSL_SETUP_RESULT=$?
+    
+    if [[ $SSL_SETUP_RESULT -eq 0 ]]; then
+        # Получаем пути к сертификатам
+        SSL_CERT=$(get_ssl_cert_path "$ROUNDCUBE_FULL_DOMAIN")
+        SSL_KEY=$(get_ssl_key_path "$ROUNDCUBE_FULL_DOMAIN")
         
-        # Обновляем настройки безопасности
+        print_step "Обновление NGINX конфига с HTTPS"
+        log_info "Adding HTTPS configuration for Roundcube"
+        
+        # Пересоздаем конфиг с HTTPS
+        cat > "$NGINX_SITE" <<EOF
+# HTTP сервер - редирект на HTTPS
+server {
+    listen 80;
+    server_name $ROUNDCUBE_FULL_DOMAIN;
+
+    # Разрешаем доступ к .well-known для Let's Encrypt
+    location ^~ /.well-known/acme-challenge/ {
+        allow all;
+        root $ROUNDCUBE_DIR;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+
+    # Редирект на HTTPS
+    location / {
+        return 301 https://\$server_name\$request_uri;
+    }
+}
+
+# HTTPS сервер для Roundcube
+server {
+    listen 443 ssl http2;
+    server_name $ROUNDCUBE_FULL_DOMAIN;
+    root $ROUNDCUBE_DIR;
+    index index.php;
+
+    access_log /var/log/nginx/roundcube.access.log;
+    error_log /var/log/nginx/roundcube.error.log;
+
+    # SSL сертификаты
+    ssl_certificate $SSL_CERT;
+    ssl_certificate_key $SSL_KEY;
+
+    # SSL настройки
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    # HSTS (раскомментируйте для продакшена)
+    # add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # Максимальный размер загружаемых файлов
+    client_max_body_size 50M;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$args;
+    }
+
+    location ~ \.php\$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include fastcgi_params;
+        
+        # Увеличенные таймауты для работы с большими письмами
+        fastcgi_read_timeout 300;
+        fastcgi_send_timeout 300;
+    }
+
+    # Запретить доступ к скрытым файлам
+    location ~ /\. {
+        deny all;
+    }
+
+    # Запретить доступ к конфигурационным директориям
+    location ~ ^/(config|temp|logs|SQL|bin|program)/ {
+        deny all;
+    }
+
+    # Кэширование статических файлов
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        access_log off;
+    }
+}
+EOF
+
+        # Обновляем конфигурацию Roundcube для HTTPS
         if [[ -f "$CONFIG_FILE" ]]; then
             sed -i "s/\$config\['force_https'\] = false;/\$config['force_https'] = true;/" "$CONFIG_FILE"
             sed -i "s/\$config\['use_https'\] = false;/\$config['use_https'] = true;/" "$CONFIG_FILE"
-            log_info "HTTPS settings updated"
+            log_info "HTTPS settings updated in config.inc.php"
+        fi
+        
+        # Проверяем и перезагружаем NGINX
+        if nginx -t >/dev/null 2>&1; then
+            systemctl reload nginx
+            print_success "HTTPS настроен для Roundcube"
+            log_info "NGINX reloaded with HTTPS configuration"
+        else
+            print_error "Ошибка в конфигурации NGINX"
+            nginx -t
         fi
     else
-        print_warning "Не удалось получить SSL-сертификат"
-        log_warn "Let's Encrypt certificate failed"
+        print_warning "SSL не настроен - Roundcube работает только по HTTP"
+        log_warn "SSL setup failed - Roundcube running HTTP only"
+        print_warning "⚠️  ВНИМАНИЕ: Использование веб-почты без HTTPS ОПАСНО!"
+    fi
+else
+    print_info "SSL отключен в конфигурации"
+    log_info "SSL disabled"
+    if [[ "$DRY_RUN" != "true" ]]; then
+        print_warning "⚠️  ВНИМАНИЕ: Использование веб-почты без HTTPS ОПАСНО!"
     fi
 fi
 
@@ -330,7 +457,22 @@ fi
 # --- Информация ---
 print_section "📮 ROUNDCUBE УСТАНОВЛЕН"
 print_success "✅ Roundcube успешно установлен"
-print_info "URL: http://${ROUNDCUBE_SUBDOMAIN:-webmail}.$DOMAIN"
+log_info "Roundcube installation completed"
+
+print_section "📌 ДОСТУП К ROUNDCUBE"
+
+# Выводим URL в зависимости от SSL
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ ${SSL_SETUP_RESULT:-1} -eq 0 ]]; then
+    print_info "   • URL:      https://$ROUNDCUBE_FULL_DOMAIN"
+    print_success "🔒 HTTPS включен - веб-почта защищена"
+    log_info "Roundcube accessible via HTTPS: https://$ROUNDCUBE_FULL_DOMAIN"
+else
+    print_info "   • URL:      http://$ROUNDCUBE_FULL_DOMAIN"
+    print_warning "⚠️  HTTP режим - соединение НЕ защищено!"
+    print_warning "⚠️  Пароли передаются открытым текстом!"
+    log_info "Roundcube accessible via HTTP only: http://$ROUNDCUBE_FULL_DOMAIN"
+fi
+
 print_info ""
 print_info "База данных Roundcube (отдельная):"
 print_info "   • Имя: $DB_NAME"
@@ -342,9 +484,17 @@ print_info "   • SMTP: localhost:587"
 print_info ""
 print_info "Для входа используйте:"
 print_info "   • Email: пользователь@$DOMAIN"
-print_info "   • Пароль: пароль из таблицы mailbox"
+print_info "   • Пароль: пароль почтового ящика"
 print_info ""
 print_warning "ВАЖНО: Roundcube использует свою отдельную БД '$DB_NAME'"
 print_warning "Почтовые данные находятся в БД '${MAIL_DB_NAME}' (PostfixAdmin)"
+
+if [[ "${ENABLE_SSL:-true}" != "true" ]] || [[ ${SSL_SETUP_RESULT:-1} -ne 0 ]]; then
+    print_info ""
+    print_section "⚠️  РЕКОМЕНДАЦИЯ ПО БЕЗОПАСНОСТИ"
+    print_warning "Включите HTTPS для защиты паролей!"
+    print_color "DIM" "  Установите ENABLE_SSL=true в main.conf"
+    print_color "DIM" "  Перезапустите установку модуля 15-webmail-roundcube.sh"
+fi
 
 log_info "Roundcube installation completed"

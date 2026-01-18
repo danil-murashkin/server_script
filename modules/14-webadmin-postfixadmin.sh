@@ -751,9 +751,10 @@ unset PGPASSWORD
 print_step "Настройка виртуального хоста NGINX для PostfixAdmin"
 NGINX_SITE_CONF="/etc/nginx/sites-available/$POSTFIXADMIN_DOMAIN"
 
-# Создаем отдельный виртуальный хост для поддомена
-print_info "Создание конфигурации: $NGINX_SITE_CONF"
+# Создаем базовую HTTP конфигурацию
+print_info "Создание HTTP конфигурации: $NGINX_SITE_CONF"
 cat > "$NGINX_SITE_CONF" <<EOF
+# HTTP сервер для PostfixAdmin
 server {
     listen 80;
     server_name $POSTFIXADMIN_DOMAIN;
@@ -761,6 +762,14 @@ server {
     index index.php;
     access_log /var/log/nginx/${POSTFIXADMIN_DOMAIN}_access.log;
     error_log /var/log/nginx/${POSTFIXADMIN_DOMAIN}_error.log;
+
+    # Разрешаем доступ к .well-known для Let's Encrypt
+    location ^~ /.well-known/acme-challenge/ {
+        allow all;
+        root $POSTFIXADMIN_DIR/public;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
 
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
@@ -778,7 +787,7 @@ server {
     }
 
     # Запретить доступ к конфигурационным файлам
-    location ~* \.(conf|sql|log)$ {
+    location ~* \.(conf|sql|log)\$ {
         deny all;
     }
 }
@@ -809,7 +818,7 @@ else
     [[ "$FORCE_MODE" != "true" ]] && exit 1
 fi
 
-# Проверка конфигурации NGINX
+# --- Проверка конфигурации и перезапуск NGINX ---
 print_step "Проверка конфигурации NGINX"
 if nginx -t > /dev/null 2>&1; then
     print_success "Конфигурация NGINX корректна"
@@ -830,6 +839,140 @@ else
     log_error "NGINX configuration test failed"
     nginx -t
     [[ "$FORCE_MODE" != "true" ]] && exit 1
+fi
+
+# ========================================
+# НАСТРОЙКА SSL ДЛЯ POSTFIXADMIN
+# ========================================
+
+if [[ "${ENABLE_SSL:-true}" == "true" ]]; then
+    print_section "🔒 НАСТРОЙКА SSL ДЛЯ POSTFIXADMIN"
+    
+    # Получаем SSL сертификат для поддомена PostfixAdmin
+    setup_ssl_certificate "$POSTFIXADMIN_DOMAIN" "$POSTFIXADMIN_DIR/public"
+    SSL_SETUP_RESULT=$?
+    
+    if [[ $SSL_SETUP_RESULT -eq 0 ]]; then
+        # Получаем пути к сертификатам
+        SSL_CERT=$(get_ssl_cert_path "$POSTFIXADMIN_DOMAIN")
+        SSL_KEY=$(get_ssl_key_path "$POSTFIXADMIN_DOMAIN")
+        
+        print_step "Обновление NGINX конфига с HTTPS"
+        log_info "Adding HTTPS configuration for PostfixAdmin"
+        
+        # Пересоздаем конфиг с HTTPS и редиректом
+        cat > "$NGINX_SITE_CONF" <<EOF
+# HTTP сервер - редирект на HTTPS
+server {
+    listen 80;
+    server_name $POSTFIXADMIN_DOMAIN;
+
+    # Разрешаем доступ к .well-known для Let's Encrypt
+    location ^~ /.well-known/acme-challenge/ {
+        allow all;
+        root $POSTFIXADMIN_DIR/public;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+
+    # Редирект на HTTPS
+    location / {
+        return 301 https://\$server_name\$request_uri;
+    }
+}
+
+# HTTPS сервер для PostfixAdmin
+server {
+    listen 443 ssl http2;
+    server_name $POSTFIXADMIN_DOMAIN;
+    root $POSTFIXADMIN_DIR/public;
+    index index.php;
+    access_log /var/log/nginx/${POSTFIXADMIN_DOMAIN}_access.log;
+    error_log /var/log/nginx/${POSTFIXADMIN_DOMAIN}_error.log;
+
+    # SSL сертификаты
+    ssl_certificate $SSL_CERT;
+    ssl_certificate_key $SSL_KEY;
+
+    # Современные SSL настройки
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    # HSTS (раскомментируйте для продакшена)
+    # add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location ~ \.php\$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.2-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        include fastcgi_params;
+        
+        # Увеличиваем таймауты для длительных операций PostfixAdmin
+        fastcgi_read_timeout 300;
+        fastcgi_send_timeout 300;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+
+    # Запретить доступ к конфигурационным файлам
+    location ~* \.(conf|sql|log)\$ {
+        deny all;
+    }
+
+    # Запретить доступ к директориям templates_c и setup после установки
+    location ~ ^/(templates_c|setup)/ {
+        deny all;
+    }
+}
+EOF
+
+        if [[ $? -eq 0 ]]; then
+            print_success "HTTPS конфигурация создана"
+            log_info "HTTPS configuration created for PostfixAdmin"
+            
+            # Проверяем и перезагружаем NGINX
+            print_step "Проверка обновленной конфигурации NGINX"
+            if nginx -t > /dev/null 2>&1; then
+                print_success "Конфигурация NGINX корректна"
+                log_info "NGINX configuration test passed"
+                
+                print_step "Перезагрузка NGINX с HTTPS"
+                if systemctl reload nginx > /dev/null 2>&1; then
+                    print_success "NGINX перезагружен с HTTPS"
+                    log_info "NGINX reloaded with HTTPS configuration"
+                else
+                    print_error "Не удалось перезагрузить NGINX"
+                    log_error "Failed to reload NGINX"
+                fi
+            else
+                print_error "Ошибки в конфигурации NGINX"
+                log_error "NGINX configuration test failed"
+                nginx -t
+            fi
+        else
+            print_error "Не удалось создать HTTPS конфигурацию"
+            log_error "Failed to create HTTPS configuration"
+        fi
+    else
+        print_warning "SSL не настроен - PostfixAdmin работает только по HTTP"
+        log_warn "SSL setup failed - PostfixAdmin running HTTP only"
+        print_info "Для включения HTTPS убедитесь что:"
+        print_info "  1. ENABLE_SSL=true в main.conf"
+        print_info "  2. Домен $POSTFIXADMIN_DOMAIN правильно настроен в DNS"
+        print_info "  3. Порт 80 открыт и доступен из интернета"
+    fi
+else
+    print_info "SSL отключен в конфигурации (ENABLE_SSL=false)"
+    log_info "SSL disabled in configuration"
 fi
 
 # --- Финальная проверка и вывод информации ---
@@ -856,34 +999,64 @@ else
     print_info "Проверьте настройки NGINX и DNS"
 fi
 
-# --- Информация для пользователя ---
-print_section "🛠️  ИНФОРМАЦИЯ О POSTFIXADMIN"
 
-print_success "✅ PostfixAdmin успешно установлен и настроен"
-print_info "URL для доступа:"
-print_info "   • http://$POSTFIXADMIN_DOMAIN"
-print_info "   • https://$POSTFIXADMIN_DOMAIN (после настройки SSL)"
-print_info ""
-print_success "✅ АВТОМАТИЧЕСКАЯ НАСТРОЙКА ЗАВЕРШЕНА:"
-print_info "   • Домен $DOMAIN добавлен в систему"
-print_info "   • Администратор: $ADMIN_EMAIL"
-print_info "   • Пароль: ADMIN_PASSWORD"
-print_info "   • База данных инициализирована"
-print_info "   • Поддомен: $POSTFIXADMIN_DOMAIN"
-print_info ""
-print_info "🚀 ГОТОВО К ИСПОЛЬЗОВАНИЮ:"
-print_info "   1. Перейдите по ссылке: http://$POSTFIXADMIN_DOMAIN"
-print_info "   2. Войдите с учетными данными администратора выше"
-print_info "   3. Начните создавать почтовые ящики и псевдонимы"
-print_info "   4. Протестируйте почту"
-print_info ""
-print_info "Полезные команды:"
-print_info "   • cd $POSTFIXADMIN_DIR"
-print_info "   • php bin/upgrade.php --yes (обновление БД)"
-print_info "   • systemctl restart nginx php8.2-fpm"
-print_info ""
-print_info "Конфигурационные файлы:"
-print_info "   • $CONFIG_FILE"
-print_info "   • /etc/nginx/sites-available/$POSTFIXADMIN_DOMAIN"
+# --- Завершение установки ---
+print_section "✅ POSTFIXADMIN УСТАНОВЛЕН"
 
-log_info "PostfixAdmin fully automated setup completed with test mailbox. Access URL: http://$POSTFIXADMIN_DOMAIN, Admin: $ADMIN_EMAIL, Test mailbox: $TEST_EMAIL"
+print_success "PostfixAdmin успешно установлен и настроен!"
+log_info "PostfixAdmin installation completed successfully"
+
+print_section "📌 ДОСТУП К POSTFIXADMIN"
+
+# Выводим разную информацию в зависимости от SSL
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ ${SSL_SETUP_RESULT:-1} -eq 0 ]]; then
+    print_info "   • URL:      https://$POSTFIXADMIN_DOMAIN"
+    print_info "   • Setup:    https://$POSTFIXADMIN_DOMAIN/setup.php"
+    print_info "   • Login:    https://$POSTFIXADMIN_DOMAIN/login.php"
+    print_info ""
+    print_success "🔒 HTTPS включен - соединение защищено"
+    log_info "PostfixAdmin accessible via HTTPS: https://$POSTFIXADMIN_DOMAIN"
+else
+    print_info "   • URL:      http://$POSTFIXADMIN_DOMAIN"
+    print_info "   • Setup:    http://$POSTFIXADMIN_DOMAIN/setup.php"
+    print_info "   • Login:    http://$POSTFIXADMIN_DOMAIN/login.php"
+    print_warning "⚠️  HTTP режим - соединение не защищено"
+    log_info "PostfixAdmin accessible via HTTP only: http://$POSTFIXADMIN_DOMAIN"
+fi
+
+print_section "👤 УЧЕТНЫЕ ДАННЫЕ"
+print_info "   • Email администратора: $ADMIN_EMAIL"
+print_info "   • Пароль:               ADMIN_PASSWORD"
+print_info "   • Домен:                $DOMAIN"
+log_info "PostfixAdmin admin: $ADMIN_EMAIL"
+
+print_section "🔐 ВАЖНЫЕ ЗАМЕЧАНИЯ ПО БЕЗОПАСНОСТИ"
+print_warning "1. После первой настройки через setup.php удалите директорию:"
+print_color "DIM" "   rm -rf $POSTFIXADMIN_DIR/public/setup/"
+print_warning "2. Измените пароль администратора через веб-интерфейс"
+print_warning "3. Используйте сложные пароли для почтовых ящиков"
+
+if [[ "${ENABLE_SSL:-true}" != "true" ]] || [[ ${SSL_SETUP_RESULT:-1} -ne 0 ]]; then
+    print_warning "4. НАСТОЯТЕЛЬНО рекомендуется включить HTTPS для безопасности"
+    print_color "DIM" "   Установите ENABLE_SSL=true в main.conf и перезапустите модуль"
+fi
+
+print_section "📋 ПОЛЕЗНЫЕ КОМАНДЫ"
+print_color "DIM" "  Директория PostfixAdmin:    cd $POSTFIXADMIN_DIR"
+print_color "DIM" "  Обновление БД:              php bin/upgrade.php --yes"
+print_color "DIM" "  Проверить статус PHP-FPM:   systemctl status php8.2-fpm"
+print_color "DIM" "  Логи NGINX:                  tail -f /var/log/nginx/${POSTFIXADMIN_DOMAIN}_error.log"
+print_color "DIM" "  Перезагрузить NGINX:         systemctl reload nginx"
+
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ ${SSL_SETUP_RESULT:-1} -eq 0 ]]; then
+    print_info ""
+    print_section "🔍 ПРОВЕРКА SSL"
+    print_color "DIM" "  Браузер:     https://$POSTFIXADMIN_DOMAIN"
+    print_color "DIM" "  SSL Test:    https://www.ssllabs.com/ssltest/analyze.html?d=$POSTFIXADMIN_DOMAIN"
+fi
+
+print_section "📄 КОНФИГУРАЦИОННЫЕ ФАЙЛЫ"
+print_info "   • PostfixAdmin config: $CONFIG_FILE"
+print_info "   • NGINX config:        /etc/nginx/sites-available/$POSTFIXADMIN_DOMAIN"
+
+log_info "PostfixAdmin setup completed. URL: http(s)://$POSTFIXADMIN_DOMAIN, Admin: $ADMIN_EMAIL"

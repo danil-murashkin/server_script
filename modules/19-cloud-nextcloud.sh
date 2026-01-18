@@ -245,7 +245,7 @@ NGINX_ENABLED="/etc/nginx/sites-enabled/$NEXTCLOUD_DOMAIN.conf"
 if [[ "$DRY_RUN" == "true" ]]; then
     print_warn "(DRY RUN) Создание NGINX конфигурации"
 else
-    # Создаем временную HTTP-only конфигурацию для получения SSL
+    # Создаем базовую HTTP конфигурацию
     cat > "$NGINX_CONF" <<'EOF'
 upstream php-handler {
     server unix:/run/php/php8.2-fpm.sock;
@@ -260,11 +260,14 @@ server {
     index index.php;
     
     client_max_body_size 10G;
+    client_body_timeout 300s;
     
-    # Для получения SSL сертификата
-    location ^~ /.well-known/acme-challenge {
+    # Разрешаем доступ к .well-known для Let's Encrypt
+    location ^~ /.well-known/acme-challenge/ {
+        allow all;
+        root NEXTCLOUD_DIR_PLACEHOLDER;
         default_type "text/plain";
-        root /var/www/letsencrypt;
+        try_files $uri =404;
     }
     
     location / {
@@ -276,6 +279,7 @@ server {
         fastcgi_pass php-handler;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include fastcgi_params;
+        fastcgi_param HTTPS off;
     }
 }
 EOF
@@ -283,8 +287,8 @@ EOF
     sed -i "s|NEXTCLOUD_DOMAIN_PLACEHOLDER|$NEXTCLOUD_DOMAIN|g" "$NGINX_CONF"
     sed -i "s|NEXTCLOUD_DIR_PLACEHOLDER|$NEXTCLOUD_DIR|g" "$NGINX_CONF"
     
-    print_success "Конфигурация NGINX создана (HTTP)"
-    log_success "NGINX config created (HTTP)"
+    print_success "HTTP конфигурация NGINX создана"
+    log_success "NGINX HTTP config created"
     
     if [[ ! -L "$NGINX_ENABLED" ]]; then
         ln -s "$NGINX_CONF" "$NGINX_ENABLED"
@@ -305,60 +309,85 @@ EOF
 fi
 
 # --- Настройка SSL сертификата ---
-if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ "${SSL_PROVIDER:-letsencrypt}" == "letsencrypt" ]]; then
-    if [[ "$DRY_RUN" != "true" ]]; then
-        if command -v certbot &>/dev/null; then
-            print_step "Получение SSL сертификата"
-            mkdir -p /var/www/letsencrypt
-            
-            CERTBOT_OPTS="--webroot -w /var/www/letsencrypt -d $NEXTCLOUD_DOMAIN --non-interactive --agree-tos --email $ADMIN_EMAIL --quiet"
-            [[ "${SSL_USE_STAGING:-false}" == "true" ]] && CERTBOT_OPTS+=" --staging"
-            
-            if certbot certonly $CERTBOT_OPTS >/dev/null 2>&1; then
-                print_success "SSL сертификат получен"
-                log_success "SSL certificate obtained for $NEXTCLOUD_DOMAIN"
-                
-                # Теперь создаем полную конфигурацию с HTTPS
-                print_step "Обновление конфигурации NGINX для HTTPS"
-                cat > "$NGINX_CONF" <<'EOF'
+# ========================================
+# НАСТРОЙКА SSL ДЛЯ NEXTCLOUD
+# ========================================
+
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ "$DRY_RUN" != "true" ]]; then
+    print_section "🔒 НАСТРОЙКА SSL ДЛЯ NEXTCLOUD"
+    
+    # Получаем SSL сертификат
+    setup_ssl_certificate "$NEXTCLOUD_DOMAIN" "$NEXTCLOUD_DIR"
+    SSL_SETUP_RESULT=$?
+    
+    if [[ $SSL_SETUP_RESULT -eq 0 ]]; then
+        # Получаем пути к сертификатам
+        SSL_CERT=$(get_ssl_cert_path "$NEXTCLOUD_DOMAIN")
+        SSL_KEY=$(get_ssl_key_path "$NEXTCLOUD_DOMAIN")
+        
+        print_step "Обновление NGINX конфига с HTTPS"
+        log_info "Adding HTTPS configuration for Nextcloud"
+        
+        # Пересоздаем конфиг с полной HTTPS конфигурацией Nextcloud
+        cat > "$NGINX_CONF" <<'EOF'
 upstream php-handler {
     server unix:/run/php/php8.2-fpm.sock;
 }
 
+# Кэширование для статических файлов
 map $arg_v $asset_immutable {
     "" "";
     default "immutable";
 }
 
+# HTTP сервер - редирект на HTTPS
 server {
     listen 80;
     listen [::]:80;
     server_name NEXTCLOUD_DOMAIN_PLACEHOLDER;
     
-    location ^~ /.well-known/acme-challenge {
+    # Разрешаем доступ к .well-known для Let's Encrypt
+    location ^~ /.well-known/acme-challenge/ {
+        allow all;
+        root NEXTCLOUD_DIR_PLACEHOLDER;
         default_type "text/plain";
-        root /var/www/letsencrypt;
+        try_files $uri =404;
     }
     
+    # Редирект на HTTPS
     location / {
         return 301 https://$server_name$request_uri;
     }
 }
 
+# HTTPS сервер для Nextcloud
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     server_name NEXTCLOUD_DOMAIN_PLACEHOLDER;
     
-    ssl_certificate /etc/letsencrypt/live/NEXTCLOUD_DOMAIN_PLACEHOLDER/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/NEXTCLOUD_DOMAIN_PLACEHOLDER/privkey.pem;
+    # SSL сертификаты
+    ssl_certificate SSL_CERT_PLACEHOLDER;
+    ssl_certificate_key SSL_KEY_PLACEHOLDER;
+    
+    # SSL настройки
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    
+    # HSTS (рекомендуется для Nextcloud)
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     
     root NEXTCLOUD_DIR_PLACEHOLDER;
     
+    # Максимальный размер файлов (10GB для больших файлов)
     client_max_body_size 10G;
     client_body_timeout 300s;
     fastcgi_buffers 64 4K;
     
+    # Gzip сжатие
     gzip on;
     gzip_vary on;
     gzip_comp_level 4;
@@ -366,6 +395,7 @@ server {
     gzip_proxied expired no-cache no-store private no_last_modified no_etag auth;
     gzip_types application/atom+xml text/javascript application/javascript application/json application/ld+json application/manifest+json application/rss+xml application/vnd.geo+json application/vnd.ms-fontobject application/wasm application/x-font-ttf application/x-web-app-manifest+json application/xhtml+xml application/xml font/opentype image/bmp image/svg+xml image/x-icon text/cache-manifest text/css text/plain text/vcard text/vnd.rim.location.xloc text/vtt text/x-component text/x-cross-domain-policy;
     
+    # Заголовки безопасности (требования Nextcloud)
     add_header Referrer-Policy "no-referrer" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
@@ -377,18 +407,21 @@ server {
     
     index index.php index.html /index.php$request_uri;
     
+    # Редирект для WebDAV клиентов
     location = / {
         if ( $http_user_agent ~ ^DavClnt ) {
             return 302 /remote.php/webdav/$is_args$args;
         }
     }
     
+    # robots.txt
     location = /robots.txt {
         allow all;
         log_not_found off;
         access_log off;
     }
     
+    # .well-known URLs (CalDAV, CardDAV)
     location ^~ /.well-known {
         location = /.well-known/carddav { return 301 /remote.php/dav/; }
         location = /.well-known/caldav  { return 301 /remote.php/dav/; }
@@ -397,9 +430,11 @@ server {
         return 301 /index.php$request_uri;
     }
     
+    # Запретить доступ к внутренним директориям
     location ~ ^/(?:build|tests|config|lib|3rdparty|templates|data)(?:$|/)  { return 404; }
     location ~ ^/(?:\.|autotest|occ|issue|indie|db_|console)                { return 404; }
     
+    # PHP обработка
     location ~ \.php(?:$|/) {
         rewrite ^/(?!index|remote|public|cron|core\/ajax\/update|status|ocs\/v[12]|updater\/.+|ocs-provider\/.+|.+\/richdocumentscode(_arm64)?\/proxy) /index.php$request_uri;
         
@@ -419,7 +454,6 @@ server {
         
         fastcgi_intercept_errors on;
         fastcgi_request_buffering off;
-        
         fastcgi_max_temp_file_size 0;
         
         fastcgi_connect_timeout 300;
@@ -427,6 +461,7 @@ server {
         fastcgi_read_timeout 300;
     }
     
+    # Статические файлы (CSS, JS, изображения)
     location ~ \.(?:css|js|svg|gif|png|jpg|ico|wasm|tflite|map|ogg|flac)$ {
         try_files $uri /index.php$request_uri;
         add_header Cache-Control "public, max-age=15778463, $asset_immutable";
@@ -437,44 +472,49 @@ server {
         }
     }
     
+    # Шрифты
     location ~ \.woff2?$ {
         try_files $uri /index.php$request_uri;
         expires 7d;
         access_log off;
     }
     
+    # remote.php редирект
     location /remote {
         return 301 /remote.php$request_uri;
     }
     
+    # Основной location
     location / {
         try_files $uri $uri/ /index.php$request_uri;
     }
 }
 EOF
 
-                sed -i "s|NEXTCLOUD_DOMAIN_PLACEHOLDER|$NEXTCLOUD_DOMAIN|g" "$NGINX_CONF"
-                sed -i "s|NEXTCLOUD_DIR_PLACEHOLDER|$NEXTCLOUD_DIR|g" "$NGINX_CONF"
-                
-                if nginx -t 2>/dev/null; then
-                    systemctl reload nginx
-                    print_success "NGINX конфигурация обновлена для HTTPS"
-                    log_success "NGINX config updated with HTTPS"
-                else
-                    print_error "Ошибка в HTTPS конфигурации"
-                    log_error "NGINX HTTPS config test failed"
-                    nginx -t
-                    [[ "$FORCE_MODE" != "true" ]] && exit 1
-                fi
-            else
-                print_warning "Не удалось получить SSL сертификат - продолжаем с HTTP"
-                log_warning "SSL certificate failed - continuing with HTTP only"
-            fi
+        # Замена плейсхолдеров
+        sed -i "s|NEXTCLOUD_DOMAIN_PLACEHOLDER|$NEXTCLOUD_DOMAIN|g" "$NGINX_CONF"
+        sed -i "s|NEXTCLOUD_DIR_PLACEHOLDER|$NEXTCLOUD_DIR|g" "$NGINX_CONF"
+        sed -i "s|SSL_CERT_PLACEHOLDER|$SSL_CERT|g" "$NGINX_CONF"
+        sed -i "s|SSL_KEY_PLACEHOLDER|$SSL_KEY|g" "$NGINX_CONF"
+        
+        # Проверяем и перезагружаем NGINX
+        if nginx -t 2>/dev/null; then
+            systemctl reload nginx
+            print_success "HTTPS настроен для Nextcloud"
+            log_info "NGINX reloaded with HTTPS configuration"
         else
-            print_warning "Certbot не найден - используем HTTP only"
-            log_warning "Certbot not found - using HTTP only"
+            print_error "Ошибка в конфигурации NGINX"
+            nginx -t
         fi
+    else
+        print_warning "SSL не настроен - Nextcloud работает только по HTTP"
+        print_warning "⚠️  ВНИМАНИЕ: Nextcloud настоятельно рекомендует использовать HTTPS!"
+        log_warn "SSL setup failed - Nextcloud running HTTP only"
     fi
+else
+    print_info "SSL отключен в конфигурации"
+    print_warning "⚠️  ВНИМАНИЕ: Nextcloud настоятельно рекомендует использовать HTTPS!"
+    log_info "SSL disabled"
 fi
 
 # --- Установка NextCloud через occ ---
@@ -626,26 +666,98 @@ if [[ "$DRY_RUN" != "true" ]]; then
 fi
 
 # --- Итоговая информация ---
-print_step "Информация о NextCloud"
-print_info "URL:          https://$NEXTCLOUD_DOMAIN"
-print_info "Логин:        $NEXTCLOUD_ADMIN_USER"
-print_info "Пароль:       ********"
-print_info "База данных:  $NEXTCLOUD_DB_NAME"
-print_info "Данные:       $NEXTCLOUD_DATA_DIR"
+print_section "☁️  NEXTCLOUD УСТАНОВЛЕН"
+print_success "✅ Облачное хранилище Nextcloud успешно установлено"
+log_info "Nextcloud setup completed"
+
+print_section "📌 ДОСТУП К NEXTCLOUD"
+
+# Выводим URL в зависимости от SSL
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ ${SSL_SETUP_RESULT:-1} -eq 0 ]]; then
+    print_info "   • URL:          https://$NEXTCLOUD_DOMAIN"
+    print_success "🔒 HTTPS включен - соединение защищено"
+    log_info "Nextcloud accessible via HTTPS: https://$NEXTCLOUD_DOMAIN"
+else
+    print_info "   • URL:          http://$NEXTCLOUD_DOMAIN"
+    print_warning "⚠️  HTTP режим - Nextcloud ТРЕБУЕТ HTTPS для полной функциональности!"
+    print_warning "⚠️  Некоторые функции (приложения) не будут работать без HTTPS"
+    log_info "Nextcloud accessible via HTTP only: http://$NEXTCLOUD_DOMAIN"
+fi
+
+print_section "👤 УЧЕТНЫЕ ДАННЫЕ АДМИНИСТРАТОРА"
+print_info "   • Логин:        $NEXTCLOUD_ADMIN_USER"
+print_info "   • Пароль:       NEXTCLOUD_ADMIN_PASSWORD"
+print_info "   • Email:        $NEXTCLOUD_ADMIN_EMAIL"
+
+print_section "⚙️  КОНФИГУРАЦИЯ"
+print_info "   • Версия:       $NEXTCLOUD_VERSION"
+print_info "   • База данных:  $NEXTCLOUD_DB_NAME"
+print_info "   • Директория:   $NEXTCLOUD_DIR"
+print_info "   • Данные:       $NEXTCLOUD_DATA_DIR"
+print_info "   • PHP-FPM:      unix:/run/php/php8.2-fpm.sock"
+
+print_section "📋 УПРАВЛЕНИЕ NEXTCLOUD (occ)"
+print_color "DIM" "  Список команд:"
+print_color "DIM" "    sudo -u www-data php $NEXTCLOUD_DIR/occ"
 print_info ""
-print_info "Управление:"
-print_info "  sudo -u www-data php $NEXTCLOUD_DIR/occ"
-print_info "  sudo -u www-data php $NEXTCLOUD_DIR/occ user:list"
-print_info "  sudo -u www-data php $NEXTCLOUD_DIR/occ app:list"
+print_color "DIM" "  Список пользователей:"
+print_color "DIM" "    sudo -u www-data php $NEXTCLOUD_DIR/occ user:list"
 print_info ""
-print_info "Добавить пользователя:"
-print_info "  sudo -u www-data php $NEXTCLOUD_DIR/occ user:add --password-from-env username"
-print_info "  (затем ввести пароль)"
+print_color "DIM" "  Список приложений:"
+print_color "DIM" "    sudo -u www-data php $NEXTCLOUD_DIR/occ app:list"
+print_info ""
+print_color "DIM" "  Проверка системы:"
+print_color "DIM" "    sudo -u www-data php $NEXTCLOUD_DIR/occ check"
+
+print_section "👥 ДОБАВИТЬ ПОЛЬЗОВАТЕЛЯ"
+print_color "DIM" "  sudo -u www-data php $NEXTCLOUD_DIR/occ user:add username"
+print_color "DIM" "  (интерактивно введите пароль и email)"
+print_info ""
+print_info "Или через переменную окружения:"
+print_color "DIM" "  OC_PASS='password' sudo -u www-data php $NEXTCLOUD_DIR/occ \\"
+print_color "DIM" "    user:add --password-from-env --display-name='User Name' \\"
+print_color "DIM" "    --group='users' username"
+
+print_section "🔧 ПОЛЕЗНЫЕ КОМАНДЫ"
+print_color "DIM" "  Режим обслуживания ВКЛ:   sudo -u www-data php $NEXTCLOUD_DIR/occ maintenance:mode --on"
+print_color "DIM" "  Режим обслуживания ВЫКЛ:  sudo -u www-data php $NEXTCLOUD_DIR/occ maintenance:mode --off"
+print_color "DIM" "  Обновить индексы БД:      sudo -u www-data php $NEXTCLOUD_DIR/occ db:add-missing-indices"
+print_color "DIM" "  Сканировать файлы:        sudo -u www-data php $NEXTCLOUD_DIR/occ files:scan --all"
+print_color "DIM" "  Очистить кэш:             sudo -u www-data php $NEXTCLOUD_DIR/occ maintenance:repair"
+
+print_section "📱 МОБИЛЬНЫЕ ПРИЛОЖЕНИЯ"
+print_info "Скачайте приложения Nextcloud:"
+print_info "   • Android:  https://play.google.com/store/apps/details?id=com.nextcloud.client"
+print_info "   • iOS:      https://apps.apple.com/app/nextcloud/id1125420102"
+
+print_section "🖥️  DESKTOP КЛИЕНТЫ"
+print_info "   • Windows/Mac/Linux: https://nextcloud.com/install/#install-clients"
+
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ ${SSL_SETUP_RESULT:-1} -eq 0 ]]; then
+    print_info ""
+    print_section "🔍 ПРОВЕРКА SSL"
+    print_color "DIM" "  Браузер:     https://$NEXTCLOUD_DOMAIN"
+    print_color "DIM" "  SSL Test:    https://www.ssllabs.com/ssltest/analyze.html?d=$NEXTCLOUD_DOMAIN"
+fi
+
+print_section "⚠️  ВАЖНЫЕ ЗАМЕЧАНИЯ"
+if [[ "${ENABLE_SSL:-true}" != "true" ]] || [[ ${SSL_SETUP_RESULT:-1} -ne 0 ]]; then
+    print_warning "1. Nextcloud НАСТОЯТЕЛЬНО рекомендует использовать HTTPS"
+    print_warning "2. Без HTTPS многие функции будут недоступны"
+    print_warning "3. Включите SSL через модуль 04-certificates.sh"
+else
+    print_info "1. Nextcloud требует регулярных обновлений для безопасности"
+    print_info "2. Настройте автоматическое резервное копирование данных"
+    print_info "3. Проверяйте предупреждения в панели администратора"
+fi
+
+print_info ""
 
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-log_info "NextCloud настроен:"
-log_info "  URL: https://$NEXTCLOUD_DOMAIN"
+log_info "Nextcloud setup completed:"
+log_info "  URL: $([ ${SSL_SETUP_RESULT:-1} -eq 0 ] && echo "https" || echo "http")://$NEXTCLOUD_DOMAIN"
 log_info "  Admin: $NEXTCLOUD_ADMIN_USER"
+log_info "  Version: $NEXTCLOUD_VERSION"
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 print_success "✅ Модуль облачного хранилища (NextCloud) завершён"

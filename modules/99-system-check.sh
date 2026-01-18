@@ -129,6 +129,40 @@ if command -v named-checkconf &> /dev/null; then
     check_config "named-checkconf" "BIND9 конфигурация"
 fi
 
+# --- Проверка SSL сертификатов ---
+print_step "Проверка SSL сертификатов"
+
+if [[ "${ENABLE_SSL:-true}" == "true" ]]; then
+    # Получаем пути к сертификатам для основного домена
+    SSL_CERT=$(get_ssl_cert_path "$DOMAIN")
+    SSL_KEY=$(get_ssl_key_path "$DOMAIN")
+    
+    if [[ -f "$SSL_CERT" ]] && [[ -f "$SSL_KEY" ]]; then
+        CONFIGS_OK+=("SSL сертификаты ($SSL_PROVIDER)")
+        log_info "SSL certificates found: $SSL_PROVIDER"
+        
+        # Проверяем срок действия сертификата
+        if openssl x509 -in "$SSL_CERT" -noout -checkend 0 2>/dev/null; then
+            CONFIGS_OK+=("SSL сертификат действителен")
+            log_info "SSL certificate is valid"
+            
+            # Получаем дату истечения
+            CERT_EXPIRY=$(openssl x509 -in "$SSL_CERT" -noout -enddate 2>/dev/null | cut -d= -f2)
+            if [[ -n "$CERT_EXPIRY" ]]; then
+                log_info "SSL certificate expires: $CERT_EXPIRY"
+            fi
+        else
+            CONFIGS_FAIL+=("SSL сертификат истёк")
+            log_warn "SSL certificate has expired"
+        fi
+    else
+        CONFIGS_FAIL+=("SSL сертификаты не найдены")
+        log_warn "SSL certificates not found"
+    fi
+else
+    log_info "SSL disabled in configuration"
+fi
+
 # --- Проверка баз данных ---
 print_step "Проверка подключений к базам данных"
 
@@ -279,34 +313,58 @@ print_info "Дата установки: $(date '+%Y-%m-%d %H:%M:%S')"
 
 print_section "ДОСТУПНЫЕ СЕРВИСЫ"
 
-print_info "Основной сайт:"
-print_info "  http://$DOMAIN"
-if ss -tlnp | grep -q ":443 "; then
-    print_info "  https://$DOMAIN"
+# Определяем протокол в зависимости от наличия SSL
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && ss -tlnp | grep -q ":443 "; then
+    PROTOCOL="https"
+    SSL_STATUS="🔒 SSL активен"
+else
+    PROTOCOL="http"
+    SSL_STATUS="⚠️  SSL не настроен"
 fi
+
+print_info "$SSL_STATUS"
+print_info ""
+
+print_info "Основной сайт:"
+print_info "  $PROTOCOL://$DOMAIN"
 
 print_info ""
 print_info "Управление почтой (PostfixAdmin):"
-print_info "  http://mailadmin.$DOMAIN"
-if ss -tlnp | grep -q ":443 "; then
-    print_info "  https://mailadmin.$DOMAIN"
-fi
+print_info "  $PROTOCOL://mailadmin.$DOMAIN"
 
 print_info ""
 print_info "Веб-почта (Roundcube):"
-print_info "  http://webmail.$DOMAIN"
-if ss -tlnp | grep -q ":443 "; then
-    print_info "  https://webmail.$DOMAIN"
+print_info "  $PROTOCOL://webmail.$DOMAIN"
+
+if [[ "${ENABLE_GITEA:-false}" == "true" ]]; then
+    GITEA_DOMAIN="${GITEA_SUBDOMAIN:-git}.$DOMAIN"
+    print_info ""
+    print_info "Git-сервер (Gitea):"
+    print_info "  $PROTOCOL://$GITEA_DOMAIN"
 fi
 
 if [[ "${ENABLE_NEXTCLOUD:-false}" == "true" ]]; then
     NEXTCLOUD_DOMAIN="${NEXTCLOUD_SUBDOMAIN:-cloud}.$DOMAIN"
     print_info ""
     print_info "Облачное хранилище (NextCloud):"
-    print_info "  http://$NEXTCLOUD_DOMAIN"
-    if ss -tlnp | grep -q ":443 "; then
-        print_info "  https://$NEXTCLOUD_DOMAIN"
-    fi
+    print_info "  $PROTOCOL://$NEXTCLOUD_DOMAIN"
+fi
+
+# Показываем информацию о SSL провайдере
+if [[ "${ENABLE_SSL:-true}" == "true" ]]; then
+    print_info ""
+    case "$SSL_PROVIDER" in
+        "letsencrypt")
+            print_info "SSL Провайдер: Let's Encrypt (автопродление)"
+            ;;
+        "self-signed")
+            print_info "SSL Провайдер: Self-Signed (самоподписанный)"
+            print_warning "  ⚠️  Браузеры покажут предупреждение безопасности"
+            ;;
+        "custom")
+            print_info "SSL Провайдер: Custom (пользовательский)"
+            ;;
+    esac
 fi
 
 print_section "УЧЕТНЫЕ ДАННЫЕ"
@@ -326,6 +384,13 @@ print_info "  Пользователь: $ADMIN_USER"
 print_info "  База: ${DOMAIN//./_}"
 print_info "  Пароль: ADMIN_PASSWORD"
 
+if [[ "${ENABLE_GITEA:-false}" == "true" ]]; then
+    print_info ""
+    print_info "Gitea:"
+    print_info "  Логин: ${GITEA_ADMIN_USER:-gitadmin}"
+    print_info "  Пароль: ADMIN_PASSWORD"
+fi
+
 if [[ "${ENABLE_NEXTCLOUD:-false}" == "true" ]]; then
     print_info ""
     print_info "NextCloud:"
@@ -337,16 +402,31 @@ fi
 print_section "НАСТРОЙКА ПОЧТОВОГО КЛИЕНТА"
 
 print_info "Входящая почта (IMAP):"
-print_info "  Сервер: $DOMAIN"
-print_info "  Порт: 993 (SSL) или 143 (STARTTLS)"
-print_info "  Безопасность: SSL/TLS"
+print_info "  Сервер:       mail.$DOMAIN"
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && ss -tlnp | grep -q ":443 "; then
+    print_info "  Порт:         993 (рекомендуется)"
+    print_info "  Безопасность: SSL/TLS"
+else
+    print_info "  Порт:         143"
+    print_info "  Безопасность: STARTTLS (если доступно)"
+fi
+print_info "  Имя:          полный email (user@$DOMAIN)"
+print_info "  Пароль:       пароль почтового ящика"
 
 print_info ""
 print_info "Исходящая почта (SMTP):"
-print_info "  Сервер: $DOMAIN"
-print_info "  Порт: 587 (STARTTLS) или 465 (SSL)"
+print_info "  Сервер:        mail.$DOMAIN"
+print_info "  Порт:          587 (рекомендуется)"
+print_info "  Безопасность:  STARTTLS"
 print_info "  Аутентификация: Обязательна"
-print_info "  Безопасность: STARTTLS или SSL/TLS"
+print_info "  Имя:           полный email (user@$DOMAIN)"
+print_info "  Пароль:        пароль почтового ящика"
+
+if [[ "${ENABLE_SSL:-true}" != "true" ]] || ! ss -tlnp | grep -q ":443 "; then
+    print_info ""
+    print_warning "⚠️  SSL не настроен - почтовый трафик может быть не защищён"
+    print_info "Рекомендуется настроить SSL через модуль 04-certificates.sh"
+fi
 
 print_section "СЛЕДУЮЩИЕ ШАГИ"
 
@@ -370,6 +450,36 @@ if [[ $OVERALL_SUCCESS_RATE -lt 90 ]]; then
     print_info "5. Исправьте выявленные проблемы:"
     print_info "   Проверьте логи: tail -f /var/log/mail.log"
     print_info "   Перезапустите службы: systemctl restart postfix dovecot"
+fi
+
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && ss -tlnp | grep -q ":443 "; then
+    print_section "ПРОВЕРКА SSL"
+    
+    print_info "Проверить SSL конфигурацию:"
+    print_info "  https://www.ssllabs.com/ssltest/analyze.html?d=$DOMAIN"
+    
+    print_info ""
+    print_info "Проверить сертификат локально:"
+    print_info "  openssl s_client -connect $DOMAIN:443 -servername $DOMAIN"
+    
+    print_info ""
+    print_info "Информация о сертификате:"
+    print_info "  openssl x509 -in $(get_ssl_cert_path "$DOMAIN") -noout -text"
+    
+    case "$SSL_PROVIDER" in
+        "letsencrypt")
+            print_info ""
+            print_info "Управление Let's Encrypt:"
+            print_info "  certbot certificates           # Список сертификатов"
+            print_info "  certbot renew --dry-run        # Тест продления"
+            print_info "  certbot renew                  # Продление вручную"
+            ;;
+        "self-signed")
+            print_info ""
+            print_warning "⚠️  Используются самоподписанные сертификаты"
+            print_info "Для продакшена рекомендуется использовать Let's Encrypt"
+            ;;
+    esac
 fi
 
 print_section "ПОЛЕЗНЫЕ КОМАНДЫ"
@@ -416,32 +526,37 @@ if [[ "${ENABLE_LOG_FILE:-true}" == "true" ]]; then
         echo ""
         echo "ДОСТУПНЫЕ СЕРВИСЫ"
         echo ""
-        echo "Основной сайт:"
-        echo "  http://$DOMAIN"
-        if ss -tlnp | grep -q ":443 "; then
-            echo "  https://$DOMAIN"
+
+        if [[ "${ENABLE_SSL:-true}" == "true" ]] && ss -tlnp | grep -q ":443 "; then
+            PROTOCOL="https"
+            echo "SSL Status: Enabled ($SSL_PROVIDER)"
+        else
+            PROTOCOL="http"
+            echo "SSL Status: Disabled"
         fi
+        echo ""
+
+        echo "Основной сайт:"
+        echo "  $PROTOCOL://$DOMAIN"
         echo ""
         echo "Управление почтой (PostfixAdmin):"
-        echo "  http://mailadmin.$DOMAIN"
-        if ss -tlnp | grep -q ":443 "; then
-            echo "  https://mailadmin.$DOMAIN"
-        fi
+        echo "  $PROTOCOL://mailadmin.$DOMAIN"
         echo ""
         echo "Веб-почта (Roundcube):"
-        echo "  http://webmail.$DOMAIN"
-        if ss -tlnp | grep -q ":443 "; then
-            echo "  https://webmail.$DOMAIN"
+        echo "  $PROTOCOL://webmail.$DOMAIN"
+
+        if [[ "${ENABLE_GITEA:-false}" == "true" ]]; then
+            GITEA_DOMAIN="${GITEA_SUBDOMAIN:-git}.$DOMAIN"
+            echo ""
+            echo "Git-сервер (Gitea):"
+            echo "  $PROTOCOL://$GITEA_DOMAIN"
         fi
-        
+
         if [[ "${ENABLE_NEXTCLOUD:-false}" == "true" ]]; then
             NEXTCLOUD_DOMAIN="${NEXTCLOUD_SUBDOMAIN:-cloud}.$DOMAIN"
             echo ""
             echo "Облачное хранилище (NextCloud):"
-            echo "  http://$NEXTCLOUD_DOMAIN"
-            if ss -tlnp | grep -q ":443 "; then
-                echo "  https://$NEXTCLOUD_DOMAIN"
-            fi
+            echo "  $PROTOCOL://$NEXTCLOUD_DOMAIN"
         fi
         
         echo ""
