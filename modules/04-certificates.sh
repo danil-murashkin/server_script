@@ -45,7 +45,7 @@ gpg_path="$keyring_dir/php.gpg"
 
 log_info "Загрузка GPG-ключа Sury PHP: $gpg_url"
 if wget -qO - "$gpg_url" | gpg --dearmor > "$gpg_path"; then
-    log_info"GPG-ключ Sury PHP сохранён: $gpg_path"
+    log_info "GPG-ключ Sury PHP сохранён: $gpg_path"
 else
     log_error "Не удалось загрузить или обработать GPG-ключ: $gpg_url"
     exit 1
@@ -64,7 +64,7 @@ log_info "Добавление репозитория Sury PHP для $codename"
 echo "$repo_line" > "$repo_file"
 
 if [[ $? -eq 0 ]]; then
-    log_info"Репозиторий Sury PHP добавлен: $repo_file"
+    log_info "Репозиторий Sury PHP добавлен: $repo_file"
 else
     log_error "Не удалось записать файл репозитория: $repo_file"
     exit 1
@@ -73,7 +73,7 @@ fi
 # --- Обновление списка пакетов ---
 log_info "Обновление списка пакетов (apt update)"
 if apt update > /dev/null 2>&1; then
-    log_info"Список пакетов обновлён"
+    log_info "Список пакетов обновлён"
 else
     log_error "Ошибка при выполнении 'apt update'"
     exit 1
@@ -90,7 +90,7 @@ case "$SSL_PROVIDER" in
         if ! command -v certbot &> /dev/null; then
             log_info "Установка certbot и python3-certbot-nginx..."
             apt -y install certbot python3-certbot-nginx > /dev/null 2>&1 && \
-                log_info"Certbot и плагин для NGINX установлены" || \
+                log_info "Certbot и плагин для NGINX установлены" || \
                 log_warn "Не удалось установить certbot"
         else
             log_info "Certbot уже установлен"
@@ -162,7 +162,7 @@ EOF
             chmod 644 "$crt"
             rm -f "$openssl_cnf"
             
-            log_info"Самоподписанный сертификат создан: $crt"
+            log_info "Самоподписанный сертификат создан: $crt"
             log_info "Сертификат включает SAN для всех поддоменов и IP: ${SERVER_IP:-127.0.0.1}"
             log_info "Срок действия: 10 лет (${days} дней)"
         else
@@ -201,7 +201,7 @@ EOF
         
         # Копирование сертификата
         if cp "$SSL_CUSTOM_CERT_PATH" "$cert_dir/cert.pem" && chmod 644 "$cert_dir/cert.pem"; then
-            log_info"Сертификат скопирован: $cert_dir/cert.pem"
+            log_info "Сертификат скопирован: $cert_dir/cert.pem"
         else
             log_error "Не удалось скопировать сертификат"
             exit 1
@@ -209,7 +209,7 @@ EOF
         
         # Копирование приватного ключа
         if cp "$SSL_CUSTOM_KEY_PATH" "$cert_dir/privkey.pem" && chmod 600 "$cert_dir/privkey.pem"; then
-            log_info"Приватный ключ скопирован: $cert_dir/privkey.pem"
+            log_info "Приватный ключ скопирован: $cert_dir/privkey.pem"
         else
             log_error "Не удалось скопировать приватный ключ"
             exit 1
@@ -218,12 +218,12 @@ EOF
         # Копирование цепочки сертификатов (если указана)
         if [[ -n "$SSL_CUSTOM_CHAIN_PATH" ]] && [[ -f "$SSL_CUSTOM_CHAIN_PATH" ]]; then
             if cp "$SSL_CUSTOM_CHAIN_PATH" "$cert_dir/chain.pem" && chmod 644 "$cert_dir/chain.pem"; then
-                log_info"Цепочка сертификатов скопирована: $cert_dir/chain.pem"
+                log_info "Цепочка сертификатов скопирована: $cert_dir/chain.pem"
                 
                 # Создаем fullchain (сертификат + цепочка)
                 cat "$cert_dir/cert.pem" "$cert_dir/chain.pem" > "$cert_dir/fullchain.pem"
                 chmod 644 "$cert_dir/fullchain.pem"
-                log_info"Создан fullchain.pem (сертификат + цепочка)"
+                log_info "Создан fullchain.pem (сертификат + цепочка)"
             else
                 log_error "Не удалось скопировать цепочку сертификатов"
                 exit 1
@@ -239,7 +239,7 @@ EOF
         # Валидация сертификата
         log_info "Проверка валидности сертификата..."
         if openssl x509 -in "$cert_dir/cert.pem" -noout -text > /dev/null 2>&1; then
-            log_info"Сертификат валиден"
+            log_info "Сертификат валиден"
             
             # Показываем информацию о сертификате
             local cert_cn=$(openssl x509 -in "$cert_dir/cert.pem" -noout -subject | sed 's/.*CN *= *//')
@@ -261,14 +261,14 @@ EOF
         local key_modulus=$(openssl rsa -noout -modulus -in "$cert_dir/privkey.pem" 2>/dev/null | openssl md5 2>/dev/null)
         
         if [[ -n "$cert_modulus" ]] && [[ "$cert_modulus" == "$key_modulus" ]]; then
-            log_info"Ключ и сертификат соответствуют друг другу"
+            log_info "Ключ и сертификат соответствуют друг другу"
         else
             log_error "Ключ и сертификат НЕ соответствуют друг другу!"
             log_error "Убедитесь что вы указали правильную пару сертификат+ключ"
             exit 1
         fi
         
-        log_info"Пользовательские SSL-сертификаты успешно настроены"
+        log_info "Пользовательские SSL-сертификаты успешно настроены"
         ;;
         
     *)
@@ -279,7 +279,7 @@ esac
 # --- Дополнительное обновление системы (опционально) ---
 if [[ "${AUTO_UPGRADE:-true}" == "true" ]]; then
     log_info "Выполняется обновление системы (apt upgrade)"
-    apt -y upgrade > /dev/null 2>&1 && log_info"Система обновлена"
+    apt -y upgrade > /dev/null 2>&1 && log_info "Система обновлена"
 fi
 
-log_info"Настройка сертификатов и репозиториев завершена"
+log_info "Настройка сертификатов и репозиториев завершена"

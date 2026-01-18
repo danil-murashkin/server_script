@@ -75,7 +75,7 @@ else
         [[ "$FORCE_MODE" != "true" ]] && exit 1
     }
     print_success "Директории созданы"
-    log_info"Directories created"
+    log_info "Directories created"
 fi
 
 # --- Скачивание NextCloud ---
@@ -137,7 +137,7 @@ else
             # Проверяем целостность ZIP
             if unzip -t "$NEXTCLOUD_ZIP" >/dev/null 2>&1; then
                 print_success "NextCloud скачан и проверен: $NEXTCLOUD_ZIP"
-                log_info"NextCloud downloaded and verified: $NEXTCLOUD_ZIP"
+                log_info "NextCloud downloaded and verified: $NEXTCLOUD_ZIP"
             else
                 print_error "Скачанный архив поврежден"
                 log_error "Downloaded archive is corrupted"
@@ -177,7 +177,7 @@ else
         
         if unzip -q "$NEXTCLOUD_ZIP" -d /var/www/ 2>/dev/null; then
             print_success "NextCloud распакован"
-            log_info"NextCloud extracted from $NEXTCLOUD_ZIP"
+            log_info "NextCloud extracted from $NEXTCLOUD_ZIP"
         else
             print_error "Не удалось распаковать архив"
             log_error "Extraction failed"
@@ -194,7 +194,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
     find "$NEXTCLOUD_DIR" -type d -exec chmod 755 {} \;
     find "$NEXTCLOUD_DIR" -type f -exec chmod 644 {} \;
     print_success "Права настроены"
-    log_info"Permissions configured"
+    log_info "Permissions configured"
 fi
 
 # --- Создание пользователя БД ---
@@ -212,7 +212,7 @@ else
             [[ "$FORCE_MODE" != "true" ]] && exit 1
         }
         print_success "Пользователь БД создан"
-        log_info"DB user created"
+        log_info "DB user created"
     fi
 fi
 
@@ -231,10 +231,10 @@ else
             [[ "$FORCE_MODE" != "true" ]] && exit 1
         }
         print_success "База данных создана"
-        log_info"Database created"
+        log_info "Database created"
     fi
     sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $NEXTCLOUD_DB_NAME TO $NEXTCLOUD_DB_USER;"
-    log_info"DB privileges granted"
+    log_info "DB privileges granted"
 fi
 
 # --- Настройка NGINX ---
@@ -288,18 +288,18 @@ EOF
     sed -i "s|NEXTCLOUD_DIR_PLACEHOLDER|$NEXTCLOUD_DIR|g" "$NGINX_CONF"
     
     print_success "HTTP конфигурация NGINX создана"
-    log_info"NGINX HTTP config created"
+    log_info "NGINX HTTP config created"
     
     if [[ ! -L "$NGINX_ENABLED" ]]; then
         ln -s "$NGINX_CONF" "$NGINX_ENABLED"
         print_success "Конфигурация активирована"
-        log_info"NGINX config enabled"
+        log_info "NGINX config enabled"
     fi
     
     if nginx -t 2>/dev/null; then
         systemctl reload nginx
         print_success "NGINX перезагружен"
-        log_info"NGINX reloaded"
+        log_info "NGINX reloaded"
     else
         print_error "Ошибка в конфигурации NGINX"
         log_error "NGINX config test failed"
@@ -576,7 +576,7 @@ else
             [[ "$FORCE_MODE" != "true" ]] && exit 1
         }
         print_success "NextCloud установлен"
-        log_info"NextCloud installed with data directory: $NEXTCLOUD_DATA_DIR"
+        log_info "NextCloud installed with data directory: $NEXTCLOUD_DATA_DIR"
     else
         print_info "NextCloud уже установлен"
         log_info "NextCloud already installed"
@@ -597,7 +597,7 @@ else
     sudo -u www-data php "$NEXTCLOUD_DIR/occ" maintenance:mode --off
     
     print_success "Конфигурация NextCloud завершена"
-    log_info"NextCloud configured"
+    log_info "NextCloud configured"
 fi
 
 # --- Настройка PHP для NextCloud ---
@@ -611,7 +611,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
         sed -i 's/^max_execution_time = .*/max_execution_time = 300/' "$PHP_INI"
         systemctl restart php8.2-fpm
         print_success "PHP настроен"
-        log_info"PHP configured"
+        log_info "PHP configured"
     fi
 fi
 
@@ -622,7 +622,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
         (crontab -u www-data -l 2>/dev/null; echo "*/5 * * * * php -f $NEXTCLOUD_DIR/cron.php") | crontab -u www-data -
         sudo -u www-data php "$NEXTCLOUD_DIR/occ" background:cron
         print_success "Cron настроен"
-        log_info"Cron configured"
+        log_info "Cron configured"
     else
         print_info "Cron уже настроен"
         log_info "Cron already configured"
@@ -634,7 +634,7 @@ print_step "Проверка установки"
 if [[ "$DRY_RUN" != "true" ]]; then
     if [[ -f "$NEXTCLOUD_DIR/occ" ]]; then
         print_success "NextCloud установлен"
-        log_info"NextCloud files present"
+        log_info "NextCloud files present"
     else
         print_error "NextCloud не найден"
         log_error "NextCloud not found"
@@ -642,7 +642,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
     
     if sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$NEXTCLOUD_DB_NAME"; then
         print_success "База данных существует"
-        log_info"Database exists"
+        log_info "Database exists"
     else
         print_error "База данных не найдена"
         log_error "Database not found"
@@ -650,7 +650,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
     
     if nginx -t 2>/dev/null && [[ -f "$NGINX_ENABLED" ]]; then
         print_success "NGINX конфигурация корректна"
-        log_info"NGINX config valid"
+        log_info "NGINX config valid"
     else
         print_warning "Проблема с NGINX"
         log_warning "NGINX issue"
@@ -658,7 +658,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
     
     if systemctl is-active --quiet php8.2-fpm; then
         print_success "PHP-FPM работает"
-        log_info"PHP-FPM active"
+        log_info "PHP-FPM active"
     else
         print_warning "PHP-FPM не работает"
         log_warning "PHP-FPM not active"

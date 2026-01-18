@@ -29,7 +29,7 @@ if id "$ADMIN_USER" &>/dev/null; then
 else
     log_info "Создаём пользователя: $ADMIN_USER"
     if useradd -m -s /bin/bash "$ADMIN_USER"; then
-        log_info"Пользователь $ADMIN_USER создан"
+        log_info "Пользователь $ADMIN_USER создан"
     else
         log_error "Не удалось создать пользователя: $ADMIN_USER"
         exit 1
@@ -101,7 +101,7 @@ if [[ -n "$ADMIN_SSH_KEY" ]]; then
         chown "$ADMIN_USER:$ADMIN_USER" "$SSH_DIR" && chmod 700 "$SSH_DIR"
     chmod 600 "$AUTH_KEYS" 2>/dev/null || true
 
-    log_info"SSH-ключ добавлен для $ADMIN_USER"
+    log_info "SSH-ключ добавлен для $ADMIN_USER"
 else
     log_warning "SSH-ключ не задан — вход по паролю (рекомендуется добавить ключ вручную)"
 fi
@@ -130,5 +130,5 @@ if [[ "$DISABLE_ROOT_SSH" == "true" ]]; then
     fi
 fi
 
-log_info"Настройка пользователей завершена: $ADMIN_USER"
+log_info "Настройка пользователей завершена: $ADMIN_USER"
 exit 0
