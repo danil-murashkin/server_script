@@ -78,7 +78,7 @@ else
             [[ "$FORCE_MODE" != "true" ]] && exit 1
         }
         print_success "Пользователь создан"
-        log_success "User created"
+        log_info "User created"
     fi
 fi
 
@@ -110,7 +110,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
     chown -R $GITEA_USER:$GITEA_USER /etc/gitea
     chmod 750 /etc/gitea
     print_success "Директории настроены"
-    log_success "Directories configured"
+    log_info "Directories configured"
 fi
 
 # --- Определение архитектуры ---
@@ -156,7 +156,7 @@ else
         if curl -fsSL "$GITEA_URL" -o "$GITEA_BINARY" 2>/dev/null; then
             chmod +x "$GITEA_BINARY"
             print_success "Gitea установлен"
-            log_success "Gitea binary downloaded"
+            log_info "Gitea binary downloaded"
             INSTALLED_VERSION=$($GITEA_BINARY --version | head -n1)
             log_info "Version: $INSTALLED_VERSION"
         else
@@ -184,7 +184,7 @@ else
             [[ "$FORCE_MODE" != "true" ]] && exit 1
         }
         print_success "Пользователь БД создан"
-        log_success "DB user created"
+        log_info "DB user created"
     fi
 fi
 
@@ -203,10 +203,10 @@ else
             [[ "$FORCE_MODE" != "true" ]] && exit 1
         }
         print_success "База данных создана"
-        log_success "Database created"
+        log_info "Database created"
     fi
     sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $GITEA_DB_NAME TO $GITEA_DB_USER;"
-    log_success "DB privileges granted"
+    log_info "DB privileges granted"
 fi
 
 # --- Создание конфигурации ---
@@ -315,7 +315,7 @@ EOF
     chown $GITEA_USER:$GITEA_USER /etc/gitea/app.ini
     chmod 600 /etc/gitea/app.ini
     print_success "Конфигурация создана"
-    log_success "Configuration created"
+    log_info "Configuration created"
 fi
 
 # --- Создание systemd сервиса ---
@@ -353,7 +353,7 @@ WantedBy=multi-user.target
 EOF
 
     print_success "Сервис создан"
-    log_success "Service file created"
+    log_info "Service file created"
     
     systemctl daemon-reload
     systemctl enable gitea
@@ -363,7 +363,7 @@ EOF
     
     if systemctl is-active --quiet gitea; then
         print_success "Gitea запущен"
-        log_success "Gitea started"
+        log_info "Gitea started"
     else
         print_error "Не удалось запустить Gitea"
         log_error "Failed to start Gitea"
@@ -401,7 +401,7 @@ else
             [[ "$FORCE_MODE" != "true" ]] && exit 1
         }
         print_success "Администратор создан"
-        log_success "Admin created"
+        log_info "Admin created"
     fi
 fi
 
@@ -462,18 +462,18 @@ server {
 EOF
 
     print_success "HTTP конфигурация NGINX создана"
-    log_success "NGINX HTTP config created"
+    log_info "NGINX HTTP config created"
     
     if [[ ! -L "$NGINX_ENABLED" ]]; then
         ln -s "$NGINX_CONF" "$NGINX_ENABLED"
         print_success "Конфигурация активирована"
-        log_success "NGINX config enabled"
+        log_info "NGINX config enabled"
     fi
     
     if nginx -t 2>/dev/null; then
         systemctl reload nginx
         print_success "NGINX перезагружен"
-        log_success "NGINX reloaded"
+        log_info "NGINX reloaded"
     else
         print_error "Ошибка в конфигурации NGINX"
         log_error "NGINX config test failed"
@@ -490,7 +490,7 @@ if [[ "${ENABLE_UFW:-true}" == "true" ]]; then
     else
         if ufw allow $GITEA_SSH_PORT/tcp comment "Gitea SSH" >/dev/null 2>&1; then
             print_success "Порт $GITEA_SSH_PORT/tcp открыт"
-            log_success "Firewall: $GITEA_SSH_PORT/tcp"
+            log_info "Firewall: $GITEA_SSH_PORT/tcp"
         else
             print_warning "Не удалось открыть порт"
             log_warning "Firewall rule failed"
@@ -637,7 +637,7 @@ if [[ -f "/etc/bind/zones/db.$DOMAIN" ]]; then
             
             if systemctl reload bind9 2>/dev/null; then
                 print_success "DNS запись добавлена"
-                log_success "DNS record added"
+                log_info "DNS record added"
             else
                 print_warning "Не удалось перезагрузить BIND9"
                 log_warning "BIND9 reload failed"
@@ -651,7 +651,7 @@ print_step "Проверка установки"
 if [[ "$DRY_RUN" != "true" ]]; then
     if systemctl is-active --quiet gitea; then
         print_success "Gitea работает"
-        log_success "Gitea active"
+        log_info "Gitea active"
     else
         print_error "Gitea не запущен"
         log_error "Gitea not active"
@@ -659,7 +659,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
     
     if ss -tlnp | grep -q ":$GITEA_PORT"; then
         print_success "Порт $GITEA_PORT слушает"
-        log_success "Port $GITEA_PORT listening"
+        log_info "Port $GITEA_PORT listening"
     else
         print_warning "Порт $GITEA_PORT не слушает"
         log_warning "Port $GITEA_PORT not listening"
@@ -667,7 +667,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
     
     if ss -tlnp | grep -q ":$GITEA_SSH_PORT"; then
         print_success "SSH порт $GITEA_SSH_PORT слушает"
-        log_success "SSH port $GITEA_SSH_PORT listening"
+        log_info "SSH port $GITEA_SSH_PORT listening"
     else
         print_warning "SSH порт не слушает"
         log_warning "SSH port not listening"
@@ -675,7 +675,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
     
     if sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw "$GITEA_DB_NAME"; then
         print_success "База данных существует"
-        log_success "Database exists"
+        log_info "Database exists"
     else
         print_error "База данных не найдена"
         log_error "Database not found"
@@ -683,7 +683,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
     
     if nginx -t 2>/dev/null && [[ -f "$NGINX_ENABLED" ]]; then
         print_success "NGINX конфигурация корректна"
-        log_success "NGINX config valid"
+        log_info "NGINX config valid"
     else
         print_warning "Проблема с NGINX"
         log_warning "NGINX issue"
