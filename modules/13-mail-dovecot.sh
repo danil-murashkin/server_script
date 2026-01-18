@@ -230,22 +230,88 @@ print_success "Службы Dovecot настроены"
 log_info "Dovecot services configured"
 
 # --- Настройка 10-ssl.conf ---
-print_step "Настройка SSL"
+print_step "Настройка SSL для Dovecot"
 
-cat > /etc/dovecot/conf.d/10-ssl.conf <<EOF
+# Получаем пути к SSL сертификатам
+SSL_CERT=$(get_ssl_cert_path "$DOMAIN")
+SSL_KEY=$(get_ssl_key_path "$DOMAIN")
+
+# Проверяем существование сертификатов
+if [[ -f "$SSL_CERT" ]] && [[ -f "$SSL_KEY" ]]; then
+    print_success "SSL сертификаты найдены"
+    log_info "SSL certificates found: $SSL_CERT, $SSL_KEY"
+    
+    # Создаем конфигурацию с реальными сертификатами
+    cat > /etc/dovecot/conf.d/10-ssl.conf <<EOF
+# SSL включен
 ssl = required
+
+# Пути к SSL сертификатам
+ssl_cert = <$SSL_CERT
+ssl_key = <$SSL_KEY
+
+# Современные безопасные протоколы (только TLSv1.2 и TLSv1.3)
+ssl_min_protocol = TLSv1.2
+ssl_prefer_server_ciphers = yes
+
+# Безопасные cipher suites
+ssl_cipher_list = HIGH:!aNULL:!MD5:!RC4:!DES:!3DES:!IDEA
+ssl_cipher_suites = TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256
+
+# Параметры Diffie-Hellman для forward secrecy
+ssl_dh = </usr/share/dovecot/dh.pem
+
+# Дополнительные настройки безопасности
+ssl_options = no_compression
+EOF
+
+    print_success "SSL настроен с реальными сертификатами"
+    log_info "SSL configured with real certificates"
+    
+    # Показываем информацию о типе сертификата
+    case "$SSL_PROVIDER" in
+        "letsencrypt")
+            print_info "Используются Let's Encrypt сертификаты"
+            log_info "Using Let's Encrypt certificates"
+            ;;
+        "self-signed")
+            print_info "Используются самоподписанные сертификаты"
+            print_warning "⚠️  Почтовые клиенты покажут предупреждение о безопасности"
+            log_info "Using self-signed certificates"
+            ;;
+        "custom")
+            print_info "Используются пользовательские сертификаты"
+            log_info "Using custom certificates"
+            ;;
+    esac
+else
+    print_warning "SSL сертификаты не найдены - используется snakeoil"
+    log_warn "SSL certificates not found - using snakeoil certificates"
+    
+    # Используем snakeoil как fallback
+    cat > /etc/dovecot/conf.d/10-ssl.conf <<EOF
+# SSL включен (с временными snakeoil сертификатами)
+ssl = required
+
+# Временные сертификаты (замените на реальные!)
 ssl_cert = </etc/ssl/certs/ssl-cert-snakeoil.pem
 ssl_key = </etc/ssl/private/ssl-cert-snakeoil.key
 
+# Современные безопасные протоколы
 ssl_min_protocol = TLSv1.2
-ssl_cipher_list = ALL:!LOW:!SSLv2:!EXP:!aNULL
 ssl_prefer_server_ciphers = yes
 
+# Безопасные cipher suites
+ssl_cipher_list = HIGH:!aNULL:!MD5:!RC4:!DES:!3DES:!IDEA
+
+# Параметры Diffie-Hellman
 ssl_dh = </usr/share/dovecot/dh.pem
 EOF
-
-print_success "SSL настроен"
-log_info "SSL configured"
+    
+    print_warning "⚠️  ВНИМАНИЕ: Dovecot использует временные snakeoil сертификаты"
+    print_info "Запустите модуль 04-certificates.sh для настройки SSL"
+    log_warn "Dovecot using snakeoil certificates - setup proper SSL"
+fi
 
 # --- Создание пользователя vmail ---
 print_step "Проверка пользователя vmail"
@@ -306,11 +372,87 @@ fi
 # --- Информация ---
 print_section "📬 DOVECOT УСТАНОВЛЕН"
 print_success "✅ Dovecot успешно настроен"
-print_info "База данных: $MAIL_DB_NAME"
-print_info "Таблица: mailbox (PostfixAdmin)"
-print_info "Протоколы: IMAP (143/993), POP3 (110/995)"
-print_info "Почтовые ящики: ${MAIL_VHOSTS_DIR:-/var/mail/vhosts}"
-print_info ""
-print_info "Следующий шаг: установите модуль 14-webadmin-postfixadmin.sh"
-
 log_info "Dovecot setup completed"
+
+print_section "📌 КОНФИГУРАЦИЯ DOVECOT"
+print_info "   • База данных:    $MAIL_DB_NAME"
+print_info "   • Таблица:        mailbox (PostfixAdmin)"
+print_info "   • Почтовые ящики: ${MAIL_VHOSTS_DIR:-/var/mail/vhosts}"
+print_info "   • Пользователь:   vmail (${MAIL_SYSTEM_UID:-5000}:${MAIL_SYSTEM_GID:-5000})"
+
+print_section "🔐 SSL/TLS НАСТРОЙКИ"
+if [[ -f "$SSL_CERT" ]] && [[ -f "$SSL_KEY" ]]; then
+    case "$SSL_PROVIDER" in
+        "letsencrypt")
+            print_success "✅ Let's Encrypt сертификаты активны"
+            print_info "   • Сертификат:     $SSL_CERT"
+            print_info "   • Приват. ключ:   $SSL_KEY"
+            print_info "   • Автопродление:  Включено"
+            ;;
+        "self-signed")
+            print_warning "⚠️  Самоподписанные сертификаты"
+            print_info "   • Сертификат:     $SSL_CERT"
+            print_info "   • Приват. ключ:   $SSL_KEY"
+            print_warning "   Почтовые клиенты покажут предупреждение безопасности"
+            ;;
+        "custom")
+            print_success "✅ Пользовательские сертификаты активны"
+            print_info "   • Сертификат:     $SSL_CERT"
+            print_info "   • Приват. ключ:   $SSL_KEY"
+            ;;
+    esac
+else
+    print_warning "⚠️  Используются временные snakeoil сертификаты"
+    print_info "   • Сертификат:     /etc/ssl/certs/ssl-cert-snakeoil.pem"
+    print_warning "   Настройте SSL через модуль 04-certificates.sh"
+fi
+
+print_section "🌐 ПРОТОКОЛЫ И ПОРТЫ"
+print_info "   IMAP (чтение почты):"
+print_info "   • Порт 143:  IMAP с STARTTLS (рекомендуется)"
+print_info "   • Порт 993:  IMAPS (SSL с самого начала)"
+print_info ""
+print_info "   POP3 (скачивание почты):"
+print_info "   • Порт 110:  POP3 с STARTTLS"
+print_info "   • Порт 995:  POP3S (SSL с самого начала)"
+print_info ""
+print_info "   LMTP (доставка от Postfix):"
+print_info "   • Сокет:     /var/run/dovecot/lmtp"
+
+print_section "📋 НАСТРОЙКА ПОЧТОВОГО КЛИЕНТА"
+print_info "Входящая почта (IMAP):"
+print_info "   • Сервер:        mail.$DOMAIN"
+print_info "   • Порт:          993 (IMAPS) или 143 (IMAP+STARTTLS)"
+print_info "   • Безопасность:  SSL/TLS"
+print_info "   • Имя:           полный email (user@$DOMAIN)"
+print_info "   • Пароль:        пароль почтового ящика"
+print_info ""
+print_info "Исходящая почта (SMTP):"
+print_info "   • Сервер:        mail.$DOMAIN"
+print_info "   • Порт:          587 (рекомендуется)"
+print_info "   • Безопасность:  STARTTLS"
+print_info "   • Аутентификация: Требуется"
+
+print_section "📋 ПОЛЕЗНЫЕ КОМАНДЫ"
+print_color "DIM" "  Проверить статус:     systemctl status dovecot"
+print_color "DIM" "  Посмотреть логи:      tail -f /var/log/mail.log"
+print_color "DIM" "  Список подключений:   doveadm who"
+print_color "DIM" "  Перезапустить:        systemctl restart dovecot"
+print_color "DIM" "  Проверить конфиг:     doveconf -n"
+
+print_section "🔍 ПРОВЕРКА ПОРТОВ"
+print_color "DIM" "  IMAP:  ss -tlnp | grep :143"
+print_color "DIM" "  IMAPS: ss -tlnp | grep :993"
+print_color "DIM" "  POP3:  ss -tlnp | grep :110"
+print_color "DIM" "  POP3S: ss -tlnp | grep :995"
+
+print_section "🧪 ТЕСТИРОВАНИЕ"
+print_color "DIM" "  Проверить SSL:        openssl s_client -connect mail.$DOMAIN:993"
+print_color "DIM" "  Тест IMAP:            telnet mail.$DOMAIN 143"
+print_color "DIM" "  Список ящиков:        doveadm mailbox list -u user@$DOMAIN"
+
+print_info ""
+print_section "➡️  СЛЕДУЮЩИЙ ШАГ"
+print_info "Установите модуль 14-webadmin-postfixadmin.sh для веб-управления"
+
+log_info "Dovecot setup completed with SSL certificates"

@@ -187,7 +187,9 @@ print_step "Настройка виртуального хоста NGINX для 
 NGINX_SITE_CONF="/etc/nginx/sites-available/$DOMAIN"
 NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/$DOMAIN"
 
+# Создаем базовую HTTP конфигурацию
 cat > "$NGINX_SITE_CONF" <<EOF
+# HTTP сервер - базовая конфигурация или редирект на HTTPS
 server {
     listen 80;
     listen [::]:80;
@@ -195,6 +197,14 @@ server {
     server_name $DOMAIN www.$DOMAIN $SERVER_IP;
     root /var/www/$DOMAIN;
     index index.html index.htm;
+
+    # Разрешаем доступ к .well-known для Let's Encrypt
+    location ^~ /.well-known/acme-challenge/ {
+        allow all;
+        root /var/www/$DOMAIN;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
 
     location / {
         try_files \$uri \$uri/ =404;
@@ -275,6 +285,127 @@ else
     [[ "$FORCE_MODE" != "true" ]] && exit 1
 fi
 
+
+# ========================================
+# НАСТРОЙКА SSL
+# ========================================
+
+if [[ "${ENABLE_SSL:-true}" == "true" ]]; then
+    print_section "🔒 НАСТРОЙКА SSL"
+    
+    # Получаем SSL сертификат
+    setup_ssl_certificate "$DOMAIN" "/var/www/$DOMAIN"
+    SSL_SETUP_RESULT=$?
+    
+    if [[ $SSL_SETUP_RESULT -eq 0 ]]; then
+        # Получаем пути к сертификатам
+        SSL_CERT=$(get_ssl_cert_path "$DOMAIN")
+        SSL_KEY=$(get_ssl_key_path "$DOMAIN")
+        
+        print_step "Добавление HTTPS конфигурации в NGINX"
+        log_info "Adding HTTPS configuration to NGINX"
+        
+        # Пересоздаем конфиг с HTTP редиректом и HTTPS блоком
+        cat > "$NGINX_SITE_CONF" <<EOF
+# HTTP сервер - редирект на HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name $DOMAIN www.$DOMAIN $SERVER_IP;
+
+    # Разрешаем доступ к .well-known для Let's Encrypt
+    location ^~ /.well-known/acme-challenge/ {
+        allow all;
+        root /var/www/$DOMAIN;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+
+    # Редирект всего остального на HTTPS
+    location / {
+        return 301 https://\$server_name\$request_uri;
+    }
+}
+
+# HTTPS сервер
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+
+    server_name $DOMAIN www.$DOMAIN;
+    root /var/www/$DOMAIN;
+    index index.html index.htm;
+
+    # SSL сертификаты
+    ssl_certificate $SSL_CERT;
+    ssl_certificate_key $SSL_KEY;
+
+    # Современные SSL настройки (безопасные)
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    # HSTS (HTTP Strict Transport Security)
+    # Раскомментируйте для продакшена после проверки что всё работает
+    # add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+
+    # Запрещаем доступ к скрытым файлам
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+    }
+
+    # Отключаем версию сервера в заголовках
+    server_tokens off;
+}
+EOF
+        
+        if [[ $? -eq 0 ]]; then
+            print_success "HTTPS конфигурация создана"
+            log_info "HTTPS configuration added to NGINX"
+        else
+            print_error "Не удалось создать HTTPS конфигурацию"
+            log_error "Failed to create HTTPS configuration"
+        fi
+        
+        # Проверка конфигурации NGINX
+        print_step "Проверка обновленной конфигурации NGINX"
+        if nginx -t > /dev/null 2>&1; then
+            print_success "Конфигурация NGINX корректна"
+            log_info "NGINX configuration test passed"
+            
+            # Перезагружаем NGINX
+            print_step "Перезагрузка NGINX с HTTPS конфигурацией"
+            if systemctl reload nginx > /dev/null 2>&1; then
+                print_success "NGINX перезагружен с HTTPS"
+                log_info "NGINX reloaded with HTTPS configuration"
+            else
+                print_error "Не удалось перезагрузить NGINX"
+                log_error "Failed to reload NGINX"
+            fi
+        else
+            print_error "Ошибки в конфигурации NGINX"
+            log_error "NGINX configuration test failed"
+            nginx -t
+        fi
+    else
+        print_warning "Не удалось настроить SSL - сайт работает только по HTTP"
+        log_warn "SSL setup failed - site running HTTP only"
+    fi
+else
+    print_info "SSL отключен в конфигурации (ENABLE_SSL=false)"
+    log_info "SSL disabled in configuration"
+fi
+
+
 # --- Отладочная информация ---
 print_section "🔍 ОТЛАДОЧНАЯ ИНФОРМАЦИЯ"
 
@@ -296,27 +427,86 @@ else
 fi
 
 # Проверка доступности веб-сервера локально
-print_step "Проверка локального доступа к http://$DOMAIN"
-if curl -s --connect-timeout 5 "http://$DOMAIN" | grep -q "Welcome to $DOMAIN"; then
-    print_success "Локальный доступ к сайту работает"
-    log_info "Local HTTP access to $DOMAIN is working"
+print_step "Проверка локального доступа"
+if [[ ${SSL_SETUP_RESULT:-1} -eq 0 ]]; then
+    # Проверяем HTTPS
+    if curl -sk "https://$DOMAIN" | grep -q "Sizif"; then
+        print_success "HTTPS доступ работает"
+        log_info "HTTPS access to $DOMAIN is working"
+    fi
 else
-    print_warning "Локальный доступ к сайту не работает — проверьте конфигурацию"
-    log_warn "Local HTTP access to $DOMAIN failed — check NGINX config"
+    # Проверяем HTTP
+    if curl -s "http://$DOMAIN" | grep -q "Sizif"; then
+        print_success "HTTP доступ работает"
+        log_info "HTTP access to $DOMAIN is working"
+    fi
 fi
 
 # --- Информация для пользователя ---
 print_section "🌐 ВАШ САЙТ ГОТОВ"
 
 print_success "✅ Веб-сервер NGINX успешно установлен и настроен"
-print_info "Доступ к сайту:"
-print_info "   • По IP:    http://$SERVER_IP"
-print_info "   • По домену: http://$DOMAIN"
-print_info "   • По WWW:    http://www.$DOMAIN"
-log_info "Website accessible at: http://$SERVER_IP, http://$DOMAIN, http://www.$DOMAIN"
 
+# Выводим разную информацию в зависимости от успешности настройки SSL
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ ${SSL_SETUP_RESULT:-1} -eq 0 ]]; then
+    print_section "🔒 HTTPS ВКЛЮЧЕН"
+    print_info "Доступ к сайту (HTTPS):"
+    print_info "   • Основной:  https://$DOMAIN"
+    print_info "   • С WWW:     https://www.$DOMAIN"
+    print_info ""
+    print_info "HTTP автоматически перенаправляется на HTTPS"
+    log_info "Website accessible via HTTPS: https://$DOMAIN"
+    
+    # Информация о типе сертификата
+    case "$SSL_PROVIDER" in
+        "letsencrypt")
+            print_info ""
+            print_section "📜 SSL СЕРТИФИКАТ"
+            print_color "DIM" "  Провайдер:        Let's Encrypt"
+            print_color "DIM" "  Автопродление:    Включено (каждые 60 дней)"
+            print_color "DIM" "  Проверить:        certbot certificates"
+            print_color "DIM" "  Тест продления:   certbot renew --dry-run"
+            ;;
+        "self-signed")
+            print_info ""
+            print_section "📜 SSL СЕРТИФИКАТ"
+            print_color "DIM" "  Провайдер:        Self-Signed (самоподписанный)"
+            print_color "YELLOW" "  ⚠️  ВНИМАНИЕ: Браузеры покажут предупреждение безопасности"
+            print_color "DIM" "  Для продакшена используйте: SSL_PROVIDER=\"letsencrypt\""
+            ;;
+        "custom")
+            print_info ""
+            print_section "📜 SSL СЕРТИФИКАТ"
+            print_color "DIM" "  Провайдер:        Custom (пользовательский)"
+            print_color "DIM" "  Расположение:     ${SSL_CUSTOM_DIR:-/etc/ssl/custom}"
+            ;;
+    esac
+else
+    print_section "⚠️ HTTP РЕЖИМ"
+    print_info "Доступ к сайту (HTTP):"
+    print_info "   • По IP:     http://$SERVER_IP"
+    print_info "   • По домену: http://$DOMAIN"
+    print_info "   • По WWW:    http://www.$DOMAIN"
+    print_info ""
+    print_warning "SSL не настроен. Для включения HTTPS:"
+    print_color "DIM" "  1. Установите ENABLE_SSL=true в main.conf"
+    print_color "DIM" "  2. Выберите SSL_PROVIDER (letsencrypt/self-signed/custom)"
+    print_color "DIM" "  3. Перезапустите установку модуля 08-web-server.sh"
+    log_info "Website accessible via HTTP only"
+fi
+
+print_info ""
 print_section "📌 ПОЛЕЗНЫЕ КОМАНДЫ"
-print_color "DIM" "  Проверить статус: systemctl status nginx"
-print_color "DIM" "  Перезагрузить:    systemctl reload nginx"
-print_color "DIM" "  Проверить конфиг: nginx -t"
-print_color "DIM" "  Логи ошибок:      tail -f /var/log/nginx/error.log"
+print_color "DIM" "  Проверить статус:   systemctl status nginx"
+print_color "DIM" "  Перезагрузить:      systemctl reload nginx"
+print_color "DIM" "  Проверить конфиг:   nginx -t"
+print_color "DIM" "  Логи доступа:       tail -f /var/log/nginx/access.log"
+print_color "DIM" "  Логи ошибок:        tail -f /var/log/nginx/error.log"
+
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ ${SSL_SETUP_RESULT:-1} -eq 0 ]]; then
+    print_info ""
+    print_section "🔍 ПРОВЕРКА SSL"
+    print_color "DIM" "  Браузер:            https://$DOMAIN"
+    print_color "DIM" "  SSL Labs:           https://www.ssllabs.com/ssltest/analyze.html?d=$DOMAIN"
+    print_color "DIM" "  Информация о cert:  openssl s_client -connect $DOMAIN:443 -servername $DOMAIN"
+fi

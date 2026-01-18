@@ -85,12 +85,21 @@ append_dot_mydomain = no
 readme_directory = no
 
 # TLS параметры
-smtpd_tls_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem
-smtpd_tls_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+# Пути к SSL сертификатам (устанавливаются ниже в зависимости от SSL_PROVIDER)
+smtpd_tls_cert_file=SSL_CERT_PLACEHOLDER
+smtpd_tls_key_file=SSL_KEY_PLACEHOLDER
 smtpd_tls_security_level=may
 smtp_tls_security_level=may
 smtpd_tls_session_cache_database = btree:\${data_directory}/smtpd_scache
 smtp_tls_session_cache_database = btree:\${data_directory}/smtp_scache
+
+# Дополнительные TLS настройки для безопасности
+smtpd_tls_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
+smtp_tls_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
+smtpd_tls_mandatory_protocols = !SSLv2, !SSLv3, !TLSv1, !TLSv1.1
+smtpd_tls_mandatory_ciphers = high
+smtpd_tls_ciphers = high
+tls_preempt_cipherlist = yes
 
 # Аутентификация SASL
 smtpd_sasl_type = dovecot
@@ -131,6 +140,53 @@ smtpd_recipient_restrictions =
 EOF
 
 log_info "Postfix main.cf configured"
+
+# --- Настройка SSL сертификатов ---
+print_step "Настройка SSL сертификатов для Postfix"
+
+# Получаем пути к SSL сертификатам
+SSL_CERT=$(get_ssl_cert_path "$DOMAIN")
+SSL_KEY=$(get_ssl_key_path "$DOMAIN")
+
+# Проверяем существование сертификатов
+if [[ -f "$SSL_CERT" ]] && [[ -f "$SSL_KEY" ]]; then
+    print_success "SSL сертификаты найдены"
+    log_info "SSL certificates found: $SSL_CERT, $SSL_KEY"
+    
+    # Заменяем плейсхолдеры в main.cf
+    sed -i "s|smtpd_tls_cert_file=SSL_CERT_PLACEHOLDER|smtpd_tls_cert_file=$SSL_CERT|g" "$POSTFIX_MAIN_CF"
+    sed -i "s|smtpd_tls_key_file=SSL_KEY_PLACEHOLDER|smtpd_tls_key_file=$SSL_KEY|g" "$POSTFIX_MAIN_CF"
+    
+    print_success "SSL сертификаты настроены в Postfix"
+    log_info "SSL certificates configured in main.cf"
+    
+    # Показываем информацию о сертификате
+    case "$SSL_PROVIDER" in
+        "letsencrypt")
+            print_info "Используются Let's Encrypt сертификаты"
+            log_info "Using Let's Encrypt certificates"
+            ;;
+        "self-signed")
+            print_info "Используются самоподписанные сертификаты"
+            print_warning "⚠️  Клиенты увидят предупреждение о безопасности"
+            log_info "Using self-signed certificates"
+            ;;
+        "custom")
+            print_info "Используются пользовательские сертификаты"
+            log_info "Using custom certificates"
+            ;;
+    esac
+else
+    print_warning "SSL сертификаты не найдены - используется snakeoil"
+    log_warn "SSL certificates not found - using snakeoil certificates"
+    
+    # Используем snakeoil как fallback
+    sed -i "s|smtpd_tls_cert_file=SSL_CERT_PLACEHOLDER|smtpd_tls_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem|g" "$POSTFIX_MAIN_CF"
+    sed -i "s|smtpd_tls_key_file=SSL_KEY_PLACEHOLDER|smtpd_tls_key_file=/etc/ssl/private/ssl-cert-snakeoil.key|g" "$POSTFIX_MAIN_CF"
+    
+    print_warning "⚠️  ВНИМАНИЕ: Почта использует временные snakeoil сертификаты"
+    print_info "Запустите модуль 04-certificates.sh для настройки SSL"
+fi
 
 # --- Создание конфигурационных файлов для PostgreSQL ---
 print_step "Создание конфигурационных файлов PostgreSQL"
@@ -259,10 +315,60 @@ fi
 # --- Информация ---
 print_section "📧 POSTFIX УСТАНОВЛЕН"
 print_success "✅ Postfix успешно настроен"
-print_info "База данных: $MAIL_DB_NAME"
-print_info "Таблицы: domain, mailbox, alias (PostfixAdmin)"
-print_info "Почтовые ящики: ${MAIL_VHOSTS_DIR:-/var/mail/vhosts}"
-print_info ""
-print_info "Следующий шаг: установите модуль 13-mail-dovecot.sh"
-
 log_info "Postfix setup completed"
+
+print_section "📌 КОНФИГУРАЦИЯ POSTFIX"
+print_info "   • Hostname:       mail.$DOMAIN"
+print_info "   • База данных:   $MAIL_DB_NAME"
+print_info "   • Таблицы:       domain, mailbox, alias (PostfixAdmin)"
+print_info "   • Почтовые ящики: ${MAIL_VHOSTS_DIR:-/var/mail/vhosts}"
+
+print_section "🔐 SSL/TLS НАСТРОЙКИ"
+if [[ -f "$SSL_CERT" ]] && [[ -f "$SSL_KEY" ]]; then
+    case "$SSL_PROVIDER" in
+        "letsencrypt")
+            print_success "✅ Let's Encrypt сертификаты активны"
+            print_info "   • Сертификат:  $SSL_CERT"
+            print_info "   • Приват. ключ: $SSL_KEY"
+            print_info "   • Автопродление: Включено"
+            ;;
+        "self-signed")
+            print_warning "⚠️  Самоподписанные сертификаты"
+            print_info "   • Сертификат:  $SSL_CERT"
+            print_info "   • Приват. ключ: $SSL_KEY"
+            print_warning "   Клиенты увидят предупреждение безопасности"
+            ;;
+        "custom")
+            print_success "✅ Пользовательские сертификаты активны"
+            print_info "   • Сертификат:  $SSL_CERT"
+            print_info "   • Приват. ключ: $SSL_KEY"
+            ;;
+    esac
+else
+    print_warning "⚠️  Используются временные snakeoil сертификаты"
+    print_info "   • Сертификат:  /etc/ssl/certs/ssl-cert-snakeoil.pem"
+    print_warning "   Настройте SSL через модуль 04-certificates.sh"
+fi
+
+print_section "🌐 SMTP ПОРТЫ"
+print_info "   • Порт 25:   SMTP (входящая почта)"
+print_info "   • Порт 587:  Submission (отправка с аутентификацией - STARTTLS)"
+print_info "   • Порт 465:  SMTPS (отправка с SSL - опционально)"
+
+print_section "📋 ПОЛЕЗНЫЕ КОМАНДЫ"
+print_color "DIM" "  Проверить статус:     systemctl status postfix"
+print_color "DIM" "  Посмотреть логи:      tail -f /var/log/mail.log"
+print_color "DIM" "  Проверить очередь:    postqueue -p"
+print_color "DIM" "  Тест конфигурации:    postfix check"
+print_color "DIM" "  Перезапустить:        systemctl restart postfix"
+
+print_section "🔍 ПРОВЕРКА ПОРТОВ"
+print_color "DIM" "  Порт 25:   ss -tlnp | grep :25"
+print_color "DIM" "  Порт 587:  ss -tlnp | grep :587"
+print_color "DIM" "  Тест SMTP: telnet mail.$DOMAIN 25"
+
+print_info ""
+print_section "➡️  СЛЕДУЮЩИЙ ШАГ"
+print_info "Установите модуль 13-mail-dovecot.sh для приёма почты (IMAP/POP3)"
+
+log_info "Postfix setup completed with SSL certificates"

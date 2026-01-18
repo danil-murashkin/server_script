@@ -413,7 +413,7 @@ NGINX_ENABLED="/etc/nginx/sites-enabled/$GITEA_DOMAIN.conf"
 if [[ "$DRY_RUN" == "true" ]]; then
     print_warn "(DRY RUN) Создание NGINX конфигурации"
 else
-    # Создаем временную HTTP-only конфигурацию для получения SSL
+    # Создаем базовую HTTP конфигурацию
     cat > "$NGINX_CONF" <<EOF
 upstream gitea {
     server 127.0.0.1:$GITEA_PORT;
@@ -427,6 +427,15 @@ server {
     access_log /var/log/nginx/gitea_access.log;
     error_log /var/log/nginx/gitea_error.log;
     
+    # Разрешаем доступ к .well-known для Let's Encrypt
+    location ^~ /.well-known/acme-challenge/ {
+        allow all;
+        root /var/www/html;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+    
+    # Максимальный размер загружаемых файлов (для больших репозиториев)
     client_max_body_size 100M;
     
     location / {
@@ -437,9 +446,13 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_set_header X-Forwarded-Host \$host;
         proxy_set_header X-Forwarded-Port \$server_port;
+        
+        # WebSocket поддержка (для уведомлений)
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
+        
+        # Увеличенные таймауты для больших операций
         proxy_connect_timeout 600;
         proxy_send_timeout 600;
         proxy_read_timeout 600;
@@ -448,8 +461,8 @@ server {
 }
 EOF
 
-    print_success "Конфигурация NGINX создана"
-    log_success "NGINX config created"
+    print_success "HTTP конфигурация NGINX создана"
+    log_success "NGINX HTTP config created"
     
     if [[ ! -L "$NGINX_ENABLED" ]]; then
         ln -s "$NGINX_CONF" "$NGINX_ENABLED"
@@ -486,21 +499,122 @@ if [[ "${ENABLE_UFW:-true}" == "true" ]]; then
 fi
 
 # --- Настройка SSL сертификата ---
-if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ "${SSL_PROVIDER:-letsencrypt}" == "letsencrypt" ]]; then
-    if [[ "$DRY_RUN" != "true" ]]; then
-        if command -v certbot &>/dev/null; then
-            CERTBOT_OPTS="--nginx -d $GITEA_DOMAIN --non-interactive --agree-tos --email $ADMIN_EMAIL --quiet"
-            [[ "${SSL_USE_STAGING:-false}" == "true" ]] && CERTBOT_OPTS+=" --staging"
-            
-            if certbot $CERTBOT_OPTS >> "$LOG_FILE" 2>&1; then
-                log_success "SSL certificate obtained for $GITEA_DOMAIN"
-            else
-                log_warning "SSL certificate failed - using HTTP only"
-            fi
-        else
-            log_warning "Certbot not found - using HTTP only"
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ "$DRY_RUN" != "true" ]]; then
+    print_section "🔒 НАСТРОЙКА SSL ДЛЯ GITEA"
+    
+    # Получаем SSL сертификат
+    setup_ssl_certificate "$GITEA_DOMAIN" "/var/www/html"
+    SSL_SETUP_RESULT=$?
+    
+    if [[ $SSL_SETUP_RESULT -eq 0 ]]; then
+        # Получаем пути к сертификатам
+        SSL_CERT=$(get_ssl_cert_path "$GITEA_DOMAIN")
+        SSL_KEY=$(get_ssl_key_path "$GITEA_DOMAIN")
+        
+        print_step "Обновление NGINX конфига с HTTPS"
+        log_info "Adding HTTPS configuration for Gitea"
+        
+        # Пересоздаем конфиг с HTTPS
+        cat > "$NGINX_CONF" <<EOF
+upstream gitea {
+    server 127.0.0.1:$GITEA_PORT;
+}
+
+# HTTP сервер - редирект на HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $GITEA_DOMAIN;
+    
+    # Разрешаем доступ к .well-known для Let's Encrypt
+    location ^~ /.well-known/acme-challenge/ {
+        allow all;
+        root /var/www/html;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+    
+    # Редирект на HTTPS
+    location / {
+        return 301 https://\$server_name\$request_uri;
+    }
+}
+
+# HTTPS сервер для Gitea
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $GITEA_DOMAIN;
+    
+    access_log /var/log/nginx/gitea_access.log;
+    error_log /var/log/nginx/gitea_error.log;
+    
+    # SSL сертификаты
+    ssl_certificate $SSL_CERT;
+    ssl_certificate_key $SSL_KEY;
+    
+    # SSL настройки
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    
+    # HSTS (раскомментируйте для продакшена)
+    # add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    
+    # Максимальный размер загружаемых файлов
+    client_max_body_size 100M;
+    
+    location / {
+        proxy_pass http://gitea;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port 443;
+        
+        # WebSocket поддержка
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Увеличенные таймауты
+        proxy_connect_timeout 600;
+        proxy_send_timeout 600;
+        proxy_read_timeout 600;
+        send_timeout 600;
+    }
+}
+EOF
+
+        # Обновляем ROOT_URL в app.ini на HTTPS
+        if [[ -f /etc/gitea/app.ini ]]; then
+            sed -i "s|^ROOT_URL.*=.*|ROOT_URL = https://$GITEA_DOMAIN|g" /etc/gitea/app.ini
+            log_info "Updated ROOT_URL to HTTPS in app.ini"
         fi
+        
+        # Проверяем и перезагружаем NGINX
+        if nginx -t 2>/dev/null; then
+            systemctl reload nginx
+            print_success "HTTPS настроен для Gitea"
+            log_info "NGINX reloaded with HTTPS configuration"
+            
+            # Перезапускаем Gitea для применения новых настроек
+            systemctl restart gitea
+            log_info "Gitea restarted with HTTPS configuration"
+        else
+            print_error "Ошибка в конфигурации NGINX"
+            nginx -t
+        fi
+    else
+        print_warning "SSL не настроен - Gitea работает только по HTTP"
+        log_warn "SSL setup failed - Gitea running HTTP only"
     fi
+else
+    print_info "SSL отключен в конфигурации"
+    log_info "SSL disabled"
 fi
 
 # --- Обновление DNS ---
@@ -577,39 +691,93 @@ if [[ "$DRY_RUN" != "true" ]]; then
 fi
 
 # --- Итоговая информация ---
-print_step "Информация о Git-сервере"
-print_info "URL:          $GITEA_ROOT_URL"
-print_info "Логин:        $GITEA_ADMIN_USER"
-print_info "Пароль:       ********"
-print_info "SSH:          git@$GITEA_DOMAIN:$GITEA_SSH_PORT"
-print_info "База данных:  $GITEA_DB_NAME"
-print_info "Репозитории:  /var/lib/gitea/data/gitea-repositories"
-print_info ""
-print_info "Регистрация:  $([ "$GITEA_DISABLE_REGISTRATION" == "true" ] && echo "отключена" || echo "включена")"
-print_info "Публичный просмотр: $([ "$GITEA_REQUIRE_SIGNIN" == "true" ] && echo "нет" || echo "да")"
+print_section "📦 GITEA УСТАНОВЛЕН"
+print_success "✅ Git-сервер Gitea успешно установлен"
+log_info "Gitea setup completed"
 
+print_section "📌 ДОСТУП К GITEA"
+
+# Выводим URL в зависимости от SSL
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ ${SSL_SETUP_RESULT:-1} -eq 0 ]]; then
+    print_info "   • Web URL:      https://$GITEA_DOMAIN"
+    print_success "🔒 HTTPS включен - соединение защищено"
+    log_info "Gitea accessible via HTTPS: https://$GITEA_DOMAIN"
+else
+    print_info "   • Web URL:      http://$GITEA_DOMAIN"
+    print_warning "⚠️  HTTP режим - соединение не защищено"
+    log_info "Gitea accessible via HTTP only: http://$GITEA_DOMAIN"
+fi
+
+print_info "   • SSH:          git@$GITEA_DOMAIN:$GITEA_SSH_PORT"
+
+print_section "👤 УЧЕТНЫЕ ДАННЫЕ АДМИНИСТРАТОРА"
+print_info "   • Логин:        $GITEA_ADMIN_USER"
+print_info "   • Пароль:       GITEA_ADMIN_PASSWORD"
+print_info "   • Email:        $GITEA_ADMIN_EMAIL"
+
+print_section "⚙️  КОНФИГУРАЦИЯ"
+print_info "   • База данных:  $GITEA_DB_NAME"
+print_info "   • Репозитории:  /var/lib/gitea/data/gitea-repositories"
+print_info "   • Конфигурация: /etc/gitea/app.ini"
+print_info "   • HTTP порт:    $GITEA_PORT (внутренний)"
+print_info "   • SSH порт:     $GITEA_SSH_PORT"
+
+print_section "🔐 НАСТРОЙКИ БЕЗОПАСНОСТИ"
+print_info "   • Регистрация:      $([ "$GITEA_DISABLE_REGISTRATION" == "true" ] && echo "отключена" || echo "включена")"
+print_info "   • Публичный доступ: $([ "$GITEA_REQUIRE_SIGNIN" == "true" ] && echo "нет" || echo "да")"
+
+if [[ "${ENABLE_SSL:-true}" != "true" ]] || [[ ${SSL_SETUP_RESULT:-1} -ne 0 ]]; then
+    print_warning "   • ⚠️  Рекомендуется включить HTTPS для безопасности!"
+fi
+
+print_section "📋 УПРАВЛЕНИЕ GITEA"
+print_color "DIM" "  Проверить статус:   systemctl status gitea"
+print_color "DIM" "  Перезапустить:      systemctl restart gitea"
+print_color "DIM" "  Посмотреть логи:    journalctl -u gitea -f"
+print_color "DIM" "  Логи NGINX:         tail -f /var/log/nginx/gitea_error.log"
+
+print_section "📥 КЛОНИРОВАНИЕ РЕПОЗИТОРИЕВ"
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ ${SSL_SETUP_RESULT:-1} -eq 0 ]]; then
+    print_info "HTTPS (рекомендуется):"
+    print_color "DIM" "  git clone https://$GITEA_DOMAIN/username/repo.git"
+else
+    print_info "HTTP:"
+    print_color "DIM" "  git clone http://$GITEA_DOMAIN/username/repo.git"
+fi
+
+print_info ""
+print_info "SSH:"
+print_color "DIM" "  git clone git@$GITEA_DOMAIN:username/repo.git"
+print_color "DIM" "  (порт $GITEA_SSH_PORT - настроить в ~/.ssh/config)"
+
+print_section "🔧 SSH КОНФИГУРАЦИЯ (~/.ssh/config)"
+print_color "DIM" "  Host $GITEA_DOMAIN"
+print_color "DIM" "      HostName $GITEA_DOMAIN"
+print_color "DIM" "      Port $GITEA_SSH_PORT"
+print_color "DIM" "      User git"
+print_color "DIM" "      IdentityFile ~/.ssh/id_rsa"
+
+print_section "👥 ДОБАВИТЬ ПОЛЬЗОВАТЕЛЯ"
+print_color "DIM" "  sudo -u git /usr/local/bin/gitea admin user create \\"
+print_color "DIM" "      --username \"user\" \\"
+print_color "DIM" "      --password \"password\" \\"
+print_color "DIM" "      --email \"user@$DOMAIN\" \\"
+print_color "DIM" "      --config /etc/gitea/app.ini"
+
+if [[ "${ENABLE_SSL:-true}" == "true" ]] && [[ ${SSL_SETUP_RESULT:-1} -eq 0 ]]; then
+    print_info ""
+    print_section "🔍 ПРОВЕРКА SSL"
+    print_color "DIM" "  Браузер:     https://$GITEA_DOMAIN"
+    print_color "DIM" "  SSL Test:    https://www.ssllabs.com/ssltest/analyze.html?d=$GITEA_DOMAIN"
+fi
+
+print_info ""
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-log_info "Gitea настроен:"
-log_info "  URL: $GITEA_ROOT_URL"
+log_info "Gitea setup completed:"
+log_info "  URL: $([ ${SSL_SETUP_RESULT:-1} -eq 0 ] && echo "https" || echo "http")://$GITEA_DOMAIN"
 log_info "  Admin: $GITEA_ADMIN_USER"
 log_info "  SSH: git@$GITEA_DOMAIN:$GITEA_SSH_PORT"
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-print_info ""
-print_info "Управление:"
-print_info "  systemctl status gitea"
-print_info "  systemctl restart gitea"
-print_info "  journalctl -u gitea -f"
-print_info ""
-print_info "Клонирование:"
-print_info "  HTTPS: git clone $GITEA_ROOT_URL/username/repo.git"
-print_info "  SSH:   git clone git@$GITEA_DOMAIN:username/repo.git"
-print_info "         (указать порт $GITEA_SSH_PORT в ~/.ssh/config)"
-print_info ""
-print_info "Добавить пользователя:"
-print_info "  sudo -u git /usr/local/bin/gitea admin user create \\"
-print_info "    --username \"user\" --password \"pass\" --email \"user@$DOMAIN\" \\"
-print_info "    --config /etc/gitea/app.ini"
 
 print_success "✅ Модуль Git-сервера (Gitea) завершён"
 log_info "Модуль 18-git-gitea.sh завершён успешно"
