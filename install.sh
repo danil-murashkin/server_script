@@ -130,13 +130,31 @@ initialize() {
         # Проверяем ADMIN_PASSWORD
         if ! grep -q "^ADMIN_PASSWORD=" "$CONFIG_FILE"; then
             print_warning "Параметр ADMIN_PASSWORD отсутствует в конфигурации"
-            read -sp "Введите пароль администратора: " ADMIN_PASSWORD </dev/tty
-            echo
+            while true; do
+                read -sp "Введите пароль администратора: " ADMIN_PASSWORD </dev/tty
+                echo
+                read -sp "Повторите пароль: " ADMIN_PASSWORD_CONFIRM </dev/tty
+                echo
+                if [[ "$ADMIN_PASSWORD" == "$ADMIN_PASSWORD_CONFIRM" ]]; then
+                    break
+                else
+                    print_error "Пароли не совпадают. Попробуйте снова."
+                fi
+            done
             sed -i "8a ADMIN_PASSWORD=\"$ADMIN_PASSWORD\"" "$CONFIG_FILE"
         elif grep -q "^ADMIN_PASSWORD=\"\"" "$CONFIG_FILE" || grep -q "^ADMIN_PASSWORD=''$" "$CONFIG_FILE" || grep -q "^ADMIN_PASSWORD=$" "$CONFIG_FILE"; then
             print_warning "Параметр ADMIN_PASSWORD пустой"
-            read -sp "Введите пароль администратора: " ADMIN_PASSWORD </dev/tty
-            echo
+            while true; do
+                read -sp "Введите пароль администратора: " ADMIN_PASSWORD </dev/tty
+                echo
+                read -sp "Повторите пароль: " ADMIN_PASSWORD_CONFIRM </dev/tty
+                echo
+                if [[ "$ADMIN_PASSWORD" == "$ADMIN_PASSWORD_CONFIRM" ]]; then
+                    break
+                else
+                    print_error "Пароли не совпадают. Попробуйте снова."
+                fi
+            done
             sed -i "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=\"$ADMIN_PASSWORD\"|" "$CONFIG_FILE"
         fi
         
