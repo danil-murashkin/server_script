@@ -23,8 +23,9 @@ print_step()   { echo -e "${BLUE}${BOLD}🔧 [STEP]${RESET}  $*"; }
 LOG_FILE="${HOME:-/root}/server-installer.log"
 
 # Настройки репозитория
+REPO_BRANCH="${REPO_BRANCH:-main}"
 REPO_URL="https://github.com/danil-murashkin/server_script.git"
-REPO_URL_ALT="https://raw.githubusercontent.com/danil-murashkin/server_script/main"
+REPO_URL_ALT="https://raw.githubusercontent.com/danil-murashkin/server_script/${REPO_BRANCH}"
 TEMP_DIR="$HOME/server_script"
 INSTALL_SCRIPT="$TEMP_DIR/install.sh"
 
@@ -489,7 +490,7 @@ case $github_status in
         print_info "Клонирование через git..."
         log_to_file "Attempting git clone from $REPO_URL"
         
-        if timeout 120 git clone --depth 1 "$REPO_URL" "$TEMP_DIR" 2>/dev/null; then
+        if timeout 120 git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$TEMP_DIR" 2>/dev/null; then
             print_success "Репозиторий клонирован"
             log_to_file "Git clone: SUCCESS"
         else
