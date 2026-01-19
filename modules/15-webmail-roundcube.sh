@@ -273,8 +273,10 @@ server {
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
         
-        fastcgi_param HTTPS on;
+        # Для HTTP (без SSL)
+        fastcgi_param HTTPS off;
 
+        # Увеличенные таймауты для работы с большими письмами
         fastcgi_read_timeout 300;
         fastcgi_send_timeout 300;
     }
@@ -384,6 +386,9 @@ server {
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         include fastcgi_params;
         
+        
+        # ВАЖНО для HTTPS - сообщаем PHP что соединение защищено
+        fastcgi_param HTTPS on;
         # Увеличенные таймауты для работы с большими письмами
         fastcgi_read_timeout 300;
         fastcgi_send_timeout 300;
