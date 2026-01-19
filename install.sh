@@ -14,6 +14,10 @@ DRY_RUN=false
 DEBUG_MODE=false
 BACKGROUND_MODE=false
 FORCE_MODE=false
+ARG_DOMAIN=""
+ARG_SERVER_IP=""
+ARG_ADMIN_EMAIL=""
+ARG_ADMIN_PASSWORD=""
 CUSTOM_MODULES=""
 SKIP_MODULES=""
 NO_DETACH=false
@@ -28,6 +32,10 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --config=*) CONFIG_FILE="${1#*=}" ;;
+            --domain=*) ARG_DOMAIN="${1#*=}" ;;
+            --ip=*) ARG_SERVER_IP="${1#*=}" ;;
+            --email=*) ARG_ADMIN_EMAIL="${1#*=}" ;;
+            --password=*) ARG_ADMIN_PASSWORD="${1#*=}" ;;
             --modules=*) CUSTOM_MODULES="${1#*=}" ;;
             --skip=*) SKIP_MODULES="${1#*=}" ;;
             --debug) DEBUG_MODE=true; ARG_DEBUG=true ;;
@@ -41,6 +49,10 @@ parse_args() {
 
 Опции:
   --config=FILE     Путь к конфигурационному файлу (по умолчанию: $CONFIG_FILE)
+  --domain=DOMAIN   Доменное имя сервера
+  --ip=IP           Внешний IP-адрес (если пусто - автоопределение)
+  --email=EMAIL     Email администратора (если пусто - admin@domain)
+  --password=PASS   Пароль администратора
   --modules=LIST    Список модулей для установки (через запятую)
   --skip=LIST       Список модулей для пропуска (через запятую)
   --debug           Включить режим отладки (DEBUG уровень логирования)
@@ -91,10 +103,17 @@ initialize() {
     # Проверка и дополнение конфигурационного файла ДО его загрузки
     if [[ -f "$CONFIG_FILE" ]]; then
         # Проверяем DOMAIN
-        if ! grep -q "^DOMAIN=" "$CONFIG_FILE"; then
+        if [[ -n "$ARG_DOMAIN" ]]; then
+            DOMAIN="$ARG_DOMAIN"
+            if grep -q "^DOMAIN=" "$CONFIG_FILE"; then
+                sed -i "s|^DOMAIN=.*|DOMAIN=\"$DOMAIN\"|" "$CONFIG_FILE"
+            else
+                sed -i "9a DOMAIN=\"$DOMAIN\"" "$CONFIG_FILE"
+            fi
+        elif ! grep -q "^DOMAIN=" "$CONFIG_FILE"; then
             print_warning "Параметр DOMAIN отсутствует в конфигурации"
             read -p "Введите доменное имя сервера (например, example.com): " DOMAIN </dev/tty
-            sed -i "8a DOMAIN=\"$DOMAIN\"" "$CONFIG_FILE"
+            sed -i "9a DOMAIN=\"$DOMAIN\"" "$CONFIG_FILE"
         elif grep -q "^DOMAIN=\"\"" "$CONFIG_FILE" || grep -q "^DOMAIN=''$" "$CONFIG_FILE" || grep -q "^DOMAIN=$" "$CONFIG_FILE"; then
             print_warning "Параметр DOMAIN пустой"
             read -p "Введите доменное имя сервера (например, example.com): " DOMAIN </dev/tty
@@ -105,12 +124,19 @@ initialize() {
         DETECTED_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 icanhazip.com 2>/dev/null || echo "")
 
         # Проверяем SERVER_IP
-        if ! grep -q "^SERVER_IP=" "$CONFIG_FILE"; then
+        if [[ -n "$ARG_SERVER_IP" ]]; then
+            SERVER_IP="$ARG_SERVER_IP"
+            if grep -q "^SERVER_IP=" "$CONFIG_FILE"; then
+                sed -i "s|^SERVER_IP=.*|SERVER_IP=\"$SERVER_IP\"|" "$CONFIG_FILE"
+            else
+                sed -i "12a SERVER_IP=\"$SERVER_IP\"" "$CONFIG_FILE"
+            fi
+        elif ! grep -q "^SERVER_IP=" "$CONFIG_FILE"; then
             print_warning "Параметр SERVER_IP отсутствует в конфигурации"
             read -p "Введите внешний IP-адрес сервера [${DETECTED_IP}]: " SERVER_IP </dev/tty
             SERVER_IP="${SERVER_IP:-$DETECTED_IP}"
             if [[ -n "$SERVER_IP" ]]; then
-                sed -i "8a SERVER_IP=\"$SERVER_IP\"" "$CONFIG_FILE"
+                sed -i "12a SERVER_IP=\"$SERVER_IP\"" "$CONFIG_FILE"
             fi
         elif grep -q "^SERVER_IP=\"\"" "$CONFIG_FILE" || grep -q "^SERVER_IP=''$" "$CONFIG_FILE" || grep -q "^SERVER_IP=$" "$CONFIG_FILE"; then
             print_warning "Параметр SERVER_IP пустой"
@@ -123,13 +149,20 @@ initialize() {
 
         # Формируем email по умолчанию
         DEFAULT_ADMIN_EMAIL="admin@${DOMAIN}"
-        
+
         # Проверяем ADMIN_EMAIL
-        if ! grep -q "^ADMIN_EMAIL=" "$CONFIG_FILE"; then
+        if [[ -n "$ARG_ADMIN_EMAIL" ]]; then
+            ADMIN_EMAIL="$ARG_ADMIN_EMAIL"
+            if grep -q "^ADMIN_EMAIL=" "$CONFIG_FILE"; then
+                sed -i "s|^ADMIN_EMAIL=.*|ADMIN_EMAIL=\"$ADMIN_EMAIL\"|" "$CONFIG_FILE"
+            else
+                sed -i "22a ADMIN_EMAIL=\"$ADMIN_EMAIL\"" "$CONFIG_FILE"
+            fi
+        elif ! grep -q "^ADMIN_EMAIL=" "$CONFIG_FILE"; then
             print_warning "Параметр ADMIN_EMAIL отсутствует в конфигурации"
             read -p "Введите email администратора [${DEFAULT_ADMIN_EMAIL}]: " ADMIN_EMAIL </dev/tty
             ADMIN_EMAIL="${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}"
-            sed -i "8a ADMIN_EMAIL=\"$ADMIN_EMAIL\"" "$CONFIG_FILE"
+            sed -i "22a ADMIN_EMAIL=\"$ADMIN_EMAIL\"" "$CONFIG_FILE"
         elif grep -q "^ADMIN_EMAIL=\"\"" "$CONFIG_FILE" || grep -q "^ADMIN_EMAIL=''$" "$CONFIG_FILE" || grep -q "^ADMIN_EMAIL=$" "$CONFIG_FILE"; then
             print_warning "Параметр ADMIN_EMAIL пустой"
             read -p "Введите email администратора [${DEFAULT_ADMIN_EMAIL}]: " ADMIN_EMAIL </dev/tty
@@ -138,7 +171,14 @@ initialize() {
         fi
         
         # Проверяем ADMIN_PASSWORD
-        if ! grep -q "^ADMIN_PASSWORD=" "$CONFIG_FILE"; then
+        if [[ -n "$ARG_ADMIN_PASSWORD" ]]; then
+            ADMIN_PASSWORD="$ARG_ADMIN_PASSWORD"
+            if grep -q "^ADMIN_PASSWORD=" "$CONFIG_FILE"; then
+                sed -i "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=\"$ADMIN_PASSWORD\"|" "$CONFIG_FILE"
+            else
+                sed -i "19a ADMIN_PASSWORD=\"$ADMIN_PASSWORD\"" "$CONFIG_FILE"
+            fi
+        elif ! grep -q "^ADMIN_PASSWORD=" "$CONFIG_FILE"; then
             print_warning "Параметр ADMIN_PASSWORD отсутствует в конфигурации"
             while true; do
                 read -sp "Введите пароль администратора: " ADMIN_PASSWORD </dev/tty
@@ -151,7 +191,7 @@ initialize() {
                     print_error "Пароли не совпадают. Попробуйте снова."
                 fi
             done
-            sed -i "8a ADMIN_PASSWORD=\"$ADMIN_PASSWORD\"" "$CONFIG_FILE"
+            sed -i "19a ADMIN_PASSWORD=\"$ADMIN_PASSWORD\"" "$CONFIG_FILE"
         elif grep -q "^ADMIN_PASSWORD=\"\"" "$CONFIG_FILE" || grep -q "^ADMIN_PASSWORD=''$" "$CONFIG_FILE" || grep -q "^ADMIN_PASSWORD=$" "$CONFIG_FILE"; then
             print_warning "Параметр ADMIN_PASSWORD пустой"
             while true; do
