@@ -165,13 +165,14 @@ if [[ "$DRY_RUN" != "true" ]]; then
     safe_mkdir "$ROUNDCUBE_DIR/logs" "www-data" "755"
     safe_touch "$CONFIG_FILE" "www-data" "640"
 
+    DB_PASS_ENCODED=$(php -r "echo rawurlencode('$DB_PASS');")
+
     cat > "$CONFIG_FILE" <<EOF
 <?php
 \$config = array();
 
 // База данных Roundcube (отдельная от почтовой системы)
-DB_PASS_ESCAPED="${DB_PASS//@/\\@}"
-\$config['db_dsnw'] = 'pgsql://$DB_USER:$DB_PASS_ESCAPED@localhost/$DB_NAME';
+\$config['db_dsnw'] = 'pgsql://$DB_USER:$DB_PASS_ENCODED@localhost/$DB_NAME';
 
 // Подключение к почтовому серверу
 \$config['smtp_conn_options'] = array(
