@@ -61,7 +61,7 @@ DOVECOT_PACKAGES=(
     ssl-cert
 )
 
-if ! dpkg -l | grep -q "^ii.*dovecot-core"; then
+if ! command -v dovecot &>/dev/null; then
     if apt install -y "${DOVECOT_PACKAGES[@]}" > /dev/null 2>&1; then
         print_success "Dovecot установлен"
         log_info "Dovecot installed successfully"
