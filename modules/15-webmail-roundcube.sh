@@ -170,10 +170,16 @@ if [[ "$DRY_RUN" != "true" ]]; then
 \$config = array();
 
 // База данных Roundcube (отдельная от почтовой системы)
-\$config['db_dsnw'] = 'pgsql://$DB_USER:$DB_PASS@localhost/$DB_NAME';
+DB_PASS_ESCAPED="${DB_PASS//@/\\@}"
+\$config['db_dsnw'] = 'pgsql://$DB_USER:$DB_PASS_ESCAPED@localhost/$DB_NAME';
 
 // Подключение к почтовому серверу
-\$config['default_host'] = 'localhost';
+\$config['smtp_conn_options'] = array(
+    'ssl' => array(
+        'verify_peer' => false,
+        'verify_peer_name' => false,
+    ),
+);
 \$config['default_port'] = 143;
 \$config['imap_auth_type'] = 'PLAIN';
 \$config['smtp_server'] = 'localhost';
