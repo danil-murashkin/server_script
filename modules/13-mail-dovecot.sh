@@ -256,7 +256,6 @@ ssl_prefer_server_ciphers = yes
 
 # Безопасные cipher suites
 ssl_cipher_list = HIGH:!aNULL:!MD5:!RC4:!DES:!3DES:!IDEA
-ssl_cipher_suites = TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256
 
 # Параметры Diffie-Hellman для forward secrecy
 ssl_dh = </usr/share/dovecot/dh.pem
