@@ -101,29 +101,39 @@ initialize() {
             sed -i "s|^DOMAIN=.*|DOMAIN=\"$DOMAIN\"|" "$CONFIG_FILE"
         fi
         
+        # Определяем внешний IP автоматически
+        DETECTED_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || curl -s --max-time 5 icanhazip.com 2>/dev/null || echo "")
+
         # Проверяем SERVER_IP
         if ! grep -q "^SERVER_IP=" "$CONFIG_FILE"; then
             print_warning "Параметр SERVER_IP отсутствует в конфигурации"
-            read -p "Введите внешний IP-адрес сервера (или Enter для пропуска): " SERVER_IP </dev/tty
+            read -p "Введите внешний IP-адрес сервера [${DETECTED_IP}]: " SERVER_IP </dev/tty
+            SERVER_IP="${SERVER_IP:-$DETECTED_IP}"
             if [[ -n "$SERVER_IP" ]]; then
                 sed -i "8a SERVER_IP=\"$SERVER_IP\"" "$CONFIG_FILE"
             fi
         elif grep -q "^SERVER_IP=\"\"" "$CONFIG_FILE" || grep -q "^SERVER_IP=''$" "$CONFIG_FILE" || grep -q "^SERVER_IP=$" "$CONFIG_FILE"; then
             print_warning "Параметр SERVER_IP пустой"
-            read -p "Введите внешний IP-адрес сервера (или Enter для пропуска): " SERVER_IP </dev/tty
+            read -p "Введите внешний IP-адрес сервера [${DETECTED_IP}]: " SERVER_IP </dev/tty
+            SERVER_IP="${SERVER_IP:-$DETECTED_IP}"
             if [[ -n "$SERVER_IP" ]]; then
                 sed -i "s|^SERVER_IP=.*|SERVER_IP=\"$SERVER_IP\"|" "$CONFIG_FILE"
             fi
         fi
+
+        # Формируем email по умолчанию
+        DEFAULT_ADMIN_EMAIL="admin@${DOMAIN}"
         
         # Проверяем ADMIN_EMAIL
         if ! grep -q "^ADMIN_EMAIL=" "$CONFIG_FILE"; then
             print_warning "Параметр ADMIN_EMAIL отсутствует в конфигурации"
-            read -p "Введите email администратора: " ADMIN_EMAIL </dev/tty
+            read -p "Введите email администратора [${DEFAULT_ADMIN_EMAIL}]: " ADMIN_EMAIL </dev/tty
+            ADMIN_EMAIL="${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}"
             sed -i "8a ADMIN_EMAIL=\"$ADMIN_EMAIL\"" "$CONFIG_FILE"
         elif grep -q "^ADMIN_EMAIL=\"\"" "$CONFIG_FILE" || grep -q "^ADMIN_EMAIL=''$" "$CONFIG_FILE" || grep -q "^ADMIN_EMAIL=$" "$CONFIG_FILE"; then
             print_warning "Параметр ADMIN_EMAIL пустой"
-            read -p "Введите email администратора: " ADMIN_EMAIL </dev/tty
+            read -p "Введите email администратора [${DEFAULT_ADMIN_EMAIL}]: " ADMIN_EMAIL </dev/tty
+            ADMIN_EMAIL="${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}"
             sed -i "s|^ADMIN_EMAIL=.*|ADMIN_EMAIL=\"$ADMIN_EMAIL\"|" "$CONFIG_FILE"
         fi
         
