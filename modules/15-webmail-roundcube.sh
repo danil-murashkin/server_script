@@ -90,6 +90,13 @@ else
     print_info "[DRY RUN] Пропуск скачивания и распаковки Roundcube"
 fi
 
+# Удаляем логотип из шаблона входа
+if [[ -f "$ROUNDCUBE_DIR/skins/elastic/templates/login.html" ]]; then
+    sed -i 's|<roundcube:object name="logo".*>|<!-- Logo removed --><br><br><br><br><br><br><br>|g' "$ROUNDCUBE_DIR/skins/elastic/templates/login.html"
+    print_info "Логотип Roundcube удалён"
+    log_info "Roundcube logo removed from login page"
+fi
+
 # --- 3. Настройка PostgreSQL: ОТДЕЛЬНАЯ БД для Roundcube ---
 # ВАЖНО: Roundcube использует свою собственную БД, отдельную от почтовой системы
 DB_NAME="${ROUNDCUBE_DB_NAME}"
@@ -165,22 +172,30 @@ if [[ "$DRY_RUN" != "true" ]]; then
     safe_mkdir "$ROUNDCUBE_DIR/logs" "www-data" "755"
     safe_touch "$CONFIG_FILE" "www-data" "640"
 
+    DB_PASS_ENCODED=$(php -r "echo rawurlencode('$DB_PASS');")
+
     cat > "$CONFIG_FILE" <<EOF
 <?php
 \$config = array();
 
 // База данных Roundcube (отдельная от почтовой системы)
-\$config['db_dsnw'] = 'pgsql://$DB_USER:$DB_PASS@localhost/$DB_NAME';
+\$config['db_dsnw'] = 'pgsql://$DB_USER:$DB_PASS_ENCODED@localhost/$DB_NAME';
 
 // Подключение к почтовому серверу
 \$config['default_host'] = 'localhost';
 \$config['default_port'] = 143;
 \$config['imap_auth_type'] = 'PLAIN';
-\$config['smtp_server'] = 'localhost';
+\$config['smtp_server'] = 'tls://localhost';
 \$config['smtp_port'] = 587;
 \$config['smtp_user'] = '%u';
 \$config['smtp_pass'] = '%p';
 \$config['smtp_auth_type'] = 'PLAIN';
+\$config['smtp_conn_options'] = array(
+    'ssl' => array(
+        'verify_peer' => false,
+        'verify_peer_name' => false,
+    ),
+);
 
 // Основные настройки
 \$config['support_url'] = '';
@@ -287,7 +302,7 @@ server {
     }
 
     # Запретить доступ к конфигурационным директориям
-    location ~ ^/(config|temp|logs|SQL|bin|program)/ {
+    location ~ ^/(config|temp|logs|SQL|bin)/ {
         deny all;
     }
 
@@ -400,7 +415,7 @@ server {
     }
 
     # Запретить доступ к конфигурационным директориям
-    location ~ ^/(config|temp|logs|SQL|bin|program)/ {
+    location ~ ^/(config|temp|logs|SQL|bin)/ {
         deny all;
     }
 

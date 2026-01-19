@@ -23,6 +23,12 @@ nano config/main.conf
 ## Параметры запуска
 
 ```bash
+# Быстрая установка с параметрами (без интерактивного ввода)
+./install.sh --domain=example.com --password=SecurePass123 --ip=1.2.3.4 --email=admin@example.com
+
+# Автоматические значения по умолчанию (ip автоопределяется, email = admin@domain)
+./install.sh --domain=example.com --password=SecurePass123 --ip="" --email=""
+
 # Установить только определенные модули
 ./install.sh --modules="dns,nginx,php"
 
