@@ -125,7 +125,16 @@ initialize() {
 
         # Проверяем SERVER_IP
         if [[ -n "$ARG_SERVER_IP" ]]; then
+            # Параметр передан явно
             SERVER_IP="$ARG_SERVER_IP"
+            if grep -q "^SERVER_IP=" "$CONFIG_FILE"; then
+                sed -i "s|^SERVER_IP=.*|SERVER_IP=\"$SERVER_IP\"|" "$CONFIG_FILE"
+            else
+                sed -i "12a SERVER_IP=\"$SERVER_IP\"" "$CONFIG_FILE"
+            fi
+        elif [[ -v ARG_SERVER_IP ]]; then
+            # Параметр передан как пустой --ip=""
+            SERVER_IP="$DETECTED_IP"
             if grep -q "^SERVER_IP=" "$CONFIG_FILE"; then
                 sed -i "s|^SERVER_IP=.*|SERVER_IP=\"$SERVER_IP\"|" "$CONFIG_FILE"
             else
@@ -139,12 +148,8 @@ initialize() {
                 sed -i "12a SERVER_IP=\"$SERVER_IP\"" "$CONFIG_FILE"
             fi
         elif grep -q "^SERVER_IP=\"\"" "$CONFIG_FILE" || grep -q "^SERVER_IP=''$" "$CONFIG_FILE" || grep -q "^SERVER_IP=$" "$CONFIG_FILE"; then
-            print_warning "Параметр SERVER_IP пустой"
-            read -p "Введите внешний IP-адрес сервера [${DETECTED_IP}]: " SERVER_IP </dev/tty
-            SERVER_IP="${SERVER_IP:-$DETECTED_IP}"
-            if [[ -n "$SERVER_IP" ]]; then
-                sed -i "s|^SERVER_IP=.*|SERVER_IP=\"$SERVER_IP\"|" "$CONFIG_FILE"
-            fi
+            SERVER_IP="$DETECTED_IP"
+            sed -i "s|^SERVER_IP=.*|SERVER_IP=\"$SERVER_IP\"|" "$CONFIG_FILE"
         fi
 
         # Формируем email по умолчанию
@@ -152,7 +157,16 @@ initialize() {
 
         # Проверяем ADMIN_EMAIL
         if [[ -n "$ARG_ADMIN_EMAIL" ]]; then
+            # Параметр передан явно
             ADMIN_EMAIL="$ARG_ADMIN_EMAIL"
+            if grep -q "^ADMIN_EMAIL=" "$CONFIG_FILE"; then
+                sed -i "s|^ADMIN_EMAIL=.*|ADMIN_EMAIL=\"$ADMIN_EMAIL\"|" "$CONFIG_FILE"
+            else
+                sed -i "22a ADMIN_EMAIL=\"$ADMIN_EMAIL\"" "$CONFIG_FILE"
+            fi
+        elif [[ -v ARG_ADMIN_EMAIL ]]; then
+            # Параметр передан как пустой --email=""
+            ADMIN_EMAIL="$DEFAULT_ADMIN_EMAIL"
             if grep -q "^ADMIN_EMAIL=" "$CONFIG_FILE"; then
                 sed -i "s|^ADMIN_EMAIL=.*|ADMIN_EMAIL=\"$ADMIN_EMAIL\"|" "$CONFIG_FILE"
             else
@@ -164,9 +178,7 @@ initialize() {
             ADMIN_EMAIL="${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}"
             sed -i "22a ADMIN_EMAIL=\"$ADMIN_EMAIL\"" "$CONFIG_FILE"
         elif grep -q "^ADMIN_EMAIL=\"\"" "$CONFIG_FILE" || grep -q "^ADMIN_EMAIL=''$" "$CONFIG_FILE" || grep -q "^ADMIN_EMAIL=$" "$CONFIG_FILE"; then
-            print_warning "Параметр ADMIN_EMAIL пустой"
-            read -p "Введите email администратора [${DEFAULT_ADMIN_EMAIL}]: " ADMIN_EMAIL </dev/tty
-            ADMIN_EMAIL="${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}"
+            ADMIN_EMAIL="$DEFAULT_ADMIN_EMAIL"
             sed -i "s|^ADMIN_EMAIL=.*|ADMIN_EMAIL=\"$ADMIN_EMAIL\"|" "$CONFIG_FILE"
         fi
         
