@@ -175,19 +175,20 @@ if [[ "$DRY_RUN" != "true" ]]; then
 \$config['db_dsnw'] = 'pgsql://$DB_USER:$DB_PASS_ENCODED@localhost/$DB_NAME';
 
 // Подключение к почтовому серверу
+\$config['default_host'] = 'localhost';
+\$config['default_port'] = 143;
+\$config['imap_auth_type'] = 'PLAIN';
+\$config['smtp_server'] = 'tls://localhost';
+\$config['smtp_port'] = 587;
+\$config['smtp_user'] = '%u';
+\$config['smtp_pass'] = '%p';
+\$config['smtp_auth_type'] = 'PLAIN';
 \$config['smtp_conn_options'] = array(
     'ssl' => array(
         'verify_peer' => false,
         'verify_peer_name' => false,
     ),
 );
-\$config['default_port'] = 143;
-\$config['imap_auth_type'] = 'PLAIN';
-\$config['smtp_server'] = 'localhost';
-\$config['smtp_port'] = 587;
-\$config['smtp_user'] = '%u';
-\$config['smtp_pass'] = '%p';
-\$config['smtp_auth_type'] = 'PLAIN';
 
 // Основные настройки
 \$config['support_url'] = '';
