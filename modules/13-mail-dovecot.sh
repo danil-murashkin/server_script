@@ -61,7 +61,7 @@ DOVECOT_PACKAGES=(
     ssl-cert
 )
 
-if ! dpkg -l | grep -q "^ii.*dovecot-core"; then
+if ! command -v dovecot &>/dev/null; then
     if apt install -y "${DOVECOT_PACKAGES[@]}" > /dev/null 2>&1; then
         print_success "Dovecot установлен"
         log_info "Dovecot installed successfully"
@@ -256,7 +256,6 @@ ssl_prefer_server_ciphers = yes
 
 # Безопасные cipher suites
 ssl_cipher_list = HIGH:!aNULL:!MD5:!RC4:!DES:!3DES:!IDEA
-ssl_cipher_suites = TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256
 
 # Параметры Diffie-Hellman для forward secrecy
 ssl_dh = </usr/share/dovecot/dh.pem

@@ -163,15 +163,20 @@ fi
 cp "$PG_HBA_CONF" "$PG_HBA_CONF.bak.$(date +%Y%m%d_%H%M%S)" 2>/dev/null && \
     log_info "Backup of pg_hba.conf created"
 
-# Добавляем правила для локального доступа
-{
-    echo "# === Добавлено скриптом установки ==="
-    echo "local   all             postgres                                md5"
-    echo "local   all             $WEB_DB_USER                            md5"
-    echo "local   all             all                                     peer"
-    echo "host    all             all             127.0.0.1/32            md5"
-    echo "host    all             all             ::1/128                 md5"
-} >> "$PG_HBA_CONF"
+# Добавляем правила для локального доступа (только если их ещё нет)
+if ! grep -q "# === Добавлено скриптом установки ===" "$PG_HBA_CONF"; then
+    {
+        echo "# === Добавлено скриптом установки ==="
+        echo "local   all             postgres                                md5"
+        echo "local   all             $WEB_DB_USER                            md5"
+        echo "local   all             all                                     peer"
+        echo "host    all             all             127.0.0.1/32            md5"
+        echo "host    all             all             ::1/128                 md5"
+    } >> "$PG_HBA_CONF"
+else
+    print_info "Правила pg_hba.conf уже существуют — пропуск"
+    log_info "pg_hba.conf rules already exist — skipping"
+fi
 
 if [[ $? -eq 0 ]]; then
     print_success "pg_hba.conf обновлён"
@@ -190,7 +195,7 @@ systemctl reload postgresql > /dev/null 2>&1 && \
 
 # --- Проверка доступа к базе данных ---
 print_step "Проверка подключения к базе данных $WEB_DB_NAME"
-PGPASSWORD="$ADMIN_PASSWORD" psql -h localhost -U "$WEB_DB_USER" -d "$WEB_DB_NAME" -c "SELECT 1;" > /dev/null 2>&1
+PGPASSWORD="$ADMIN_PASSWORD" psql -U "$WEB_DB_USER" -d "$WEB_DB_NAME" -h localhost -c "SELECT 1;" > /dev/null 2>&1
 if [[ $? -eq 0 ]]; then
     print_success "Подключение к базе данных успешно"
     log_info "Database connection test passed"
