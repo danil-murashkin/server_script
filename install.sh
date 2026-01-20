@@ -103,6 +103,7 @@ initialize() {
     fi
     # Создаем директорию для логов
     mkdir -p "$LOG_DIR" 2>/dev/null || true
+    export LOG_DIR
 
     # Применение параметров из конфига (если не переопределены через командную строку)
     [[ "$ARG_DEBUG" == "false" ]] && DEBUG_MODE="${DEBUG_MODE:-false}"
@@ -289,7 +290,7 @@ run_installation() {
             print_step "(DRY RUN) $module"
             log_info "[DRY RUN] $module"
         else
-            if bash "$MODULES_DIR/$module"; then
+            if LOG_DIR="$LOG_DIR" LOG_FILE="$LOG_FILE" LOG_LEVEL="$LOG_LEVEL" ENABLE_LOG_FILE="$ENABLE_LOG_FILE" bash "$MODULES_DIR/$module"; then
                 log_module_done "$module"
                 ((executed++))
             else
@@ -356,6 +357,7 @@ main() {
         fi
         # Создаем директорию для логов
         mkdir -p "$LOG_DIR" 2>/dev/null || true
+        export LOG_DIR
 
         echo ""
         print_info "Запуск установки в фоновом режиме..."

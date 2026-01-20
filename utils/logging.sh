@@ -34,7 +34,7 @@ init_logging() {
     _init_log_dir
 
     local log_path
-    if [[ -z "${LOG_DIR}" ]]; then
+    if [[ -z "${LOG_DIR:-}" ]]; then
         log_path="${LOG_FILE}"
     else
         log_path="${LOG_DIR}/${LOG_FILE}"

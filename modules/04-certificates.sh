@@ -8,6 +8,13 @@
 [[ -z "${UTIL_LOGGING_LOADED}" ]] && source ./utils/logging.sh 2>/dev/null
 [[ -z "${UTIL_FUNCTIONS_LOADED}" ]] && source ./utils/functions.sh 2>/dev/null
 
+# --- Загружаем конфиг ---
+load_config || {
+    print_error "Не удалось загрузить конфигурацию"
+    log_error "Failed to load required configuration"
+    [[ "$FORCE_MODE" != "true" ]] && exit 1
+}
+
 log_info "Начало настройки репозиториев и сертификатов"
 
 # --- Проверка: уже добавлен репозиторий Sury PHP? ---

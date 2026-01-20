@@ -52,7 +52,7 @@ INSTALL_SCRIPT_DIR="$INSTALL_DIR/server_script"
 INSTALL_SCRIPT="$INSTALL_SCRIPT_DIR/install.sh"
 
 # Создаем директории и их очистку заранее
-rm -rf "$INSTALL_SCRIPT_DIR"
+# rm -rf "$INSTALL_SCRIPT_DIR"
 mkdir -p "$INSTALL_SCRIPT_DIR" || {
     print_error "Не удалось создать: $INSTALL_SCRIPT_DIR"
     exit 1
