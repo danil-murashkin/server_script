@@ -5,9 +5,21 @@
 
 UTIL_PRINT_LOADED=true
 
-# Значения по умолчанию для консольного лога
-: "${LOG_DIR:=/var/log/server-installer}"
-: "${CONSOLE_LOG_FILE:=server-script-console.log}"
+# Определяем директорию скрипта
+SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+
+# Если LOG_DIR не задана или пустая, используем директорию скрипта
+if [[ -z "${LOG_DIR+x}" ]] || [[ -z "${LOG_DIR}" ]]; then
+    LOG_DIR="$SCRIPT_DIR/logs"
+elif [[ "${LOG_DIR}" != /* ]]; then
+    # Если путь относительный (не начинается с /), делаем его относительно SCRIPT_DIR
+    LOG_DIR="$SCRIPT_DIR/${LOG_DIR}"
+fi
+
+# Создаем директорию для логов если её нет
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+: "${CONSOLE_LOG_FILE:=console.log}"
 : "${ENABLE_CONSOLE_LOG:=false}"
 
 # ANSI цветовые коды

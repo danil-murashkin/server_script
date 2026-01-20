@@ -76,7 +76,7 @@ parse_args() {
   - Логи: \$LOG_DIR/\$LOG_FILE и \$LOG_DIR/\$CONSOLE_LOG_FILE
 
 Просмотр логов в реальном времени:
-  tail -f /var/log/server-installer/server-script-console.log
+  tail -f ./logs/server-script-console.log
 EOF
                 exit 0
                 ;;

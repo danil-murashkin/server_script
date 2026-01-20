@@ -60,32 +60,40 @@ nano config/main.conf
 - PID процесса сохраняется в `/tmp/installer_bg_running`
 
 ```bash
-# Запуск в фоне
+# Запуск в фоне одной командой
+curl -sSL https://raw.githubusercontent.com/danil-murashkin/server_script/main/bootstrap.sh | bash -s -- --install --background --password=YourPass123 --domain=example.com --ip="" --email=""
+
+# Или локально
 ./install.sh --background
 
 # Просмотр логов в реальном времени
-tail -f /var/log/server-installer/console.log
+tail -f ~/server_script/logs/console.log
 
 # Или лог событий
-tail -f /var/log/server-installer/install.log
+tail -f ~/server_script/logs/install.log
 ```
 
 ## Логирование
 
-Система создает два типа логов в директории `/var/log/server-installer/`:
+Система создает несколько типов логов:
 
-1. **install.log** - структурированный лог событий с метками времени
-   - Форматированные записи о ходе установки
-   - Уровни: DEBUG, INFO, WARN, ERROR
-   - Используется для анализа выполнения модулей
+### Bootstrap логи
+- **~/server_script/logs/bootstrap.log** - лог загрузки и скачивания файлов
 
-2. **console.log** - полный вывод консоли (stdout/stderr)
-   - Дублирует весь вывод в консоль включая команды
-   - Используется для отладки и полной трассировки
+### Install логи
+- **~/server_script/logs/install.log** - структурированный лог событий с метками времени
+  - Форматированные записи о ходе установки
+  - Уровни: DEBUG, INFO, WARN, ERROR
+  - Используется для анализа выполнения модулей
+
+- **~/server_script/logs/console.log** - полный вывод консоли (stdout/stderr)
+  - Дублирует весь вывод в консоль включая команды
+  - Используется для отладки и полной трассировки
+  - Используется в режиме `--background`
 
 Управление логированием через `config/main.conf`:
 ```bash
-LOG_DIR="/var/log/server-installer"  # Директория логов
+LOG_DIR="~/server_script/logs"        # Директория логов (по умолчанию)
 LOG_FILE="install.log"                # Имя лога событий
 CONSOLE_LOG_FILE="console.log"        # Имя лога консоли
 ENABLE_LOG_FILE=true                  # Включить лог событий
@@ -193,7 +201,7 @@ DISABLE_ROOT_SSH=true               # Отключить root по SSH
 #### Отладка и логирование
 ```bash
 DEBUG_MODE=false                    # Режим отладки
-LOG_DIR="/var/log/server-installer" # Директория логов
+LOG_DIR="~/server_script/logs"      # Директория логов (по умолчанию)
 LOG_FILE="install.log"              # Лог событий
 CONSOLE_LOG_FILE="console.log"      # Лог консоли
 ENABLE_LOG_FILE=true                # Включить лог событий
@@ -348,10 +356,13 @@ ADDITIONAL_MAILBOXES="admin:SecurePass123,info,support:AnotherPass456"
 ### Просмотр логов
 ```bash
 # Лог событий установки
-tail -f /var/log/server-installer/install.log
+tail -f ~/server_script/logs/install.log
 
 # Полный вывод консоли
-tail -f /var/log/server-installer/console.log
+tail -f ~/server_script/logs/console.log
+
+# Лог bootstrap (загрузка файлов)
+tail -f ~/server_script/logs/bootstrap.log
 
 # Логи конкретного сервиса
 journalctl -u nginx -f
