@@ -90,6 +90,12 @@ else
     print_info "[DRY RUN] Пропуск скачивания и распаковки Roundcube"
 fi
 
+# Удаляем логотип из шаблона входа
+if [[ -f "$ROUNDCUBE_DIR/skins/elastic/templates/login.html" ]]; then
+    sed -i 's|<img src="skins/elastic/images/logo.svg.*alt="Logo">|<!-- Logo removed -->|g' "$ROUNDCUBE_DIR/skins/elastic/templates/login.html"
+    log_info "Roundcube logo removed from login page"
+fi
+
 # --- 3. Настройка PostgreSQL: ОТДЕЛЬНАЯ БД для Roundcube ---
 # ВАЖНО: Roundcube использует свою собственную БД, отдельную от почтовой системы
 DB_NAME="${ROUNDCUBE_DB_NAME}"
