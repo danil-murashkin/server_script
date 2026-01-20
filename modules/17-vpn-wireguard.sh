@@ -35,8 +35,8 @@ VPN_NETMASK="${VPN_NETMASK:-255.255.255.0}"
 VPN_DNS="${VPN_DNS:-8.8.8.8, 8.8.4.4}"
 VPN_SUBDOMAIN="${VPN_SUBDOMAIN:-vpn}"
 VPN_URL="$VPN_SUBDOMAIN.$DOMAIN"
-VPN_DEFAULT_CLIENT="${VPN_DEFAULT_CLIENT:-${ADMIN_USER:-admin}}"
 VPN_MAX_CLIENTS="${VPN_MAX_CLIENTS:-10}"
+VPN_DEFAULT_CLIENTS="${VPN_DEFAULT_CLIENTS:-${ADMIN_USER:-admin}::}"
 
 # Конвертация CIDR для WireGuard
 VPN_CIDR="24"  # Стандартно для /24 сети
@@ -279,6 +279,8 @@ fi
 create_client_config() {
     local CLIENT_NAME="$1"
     local CLIENT_IP="$2"
+    local RESTORE_PRIVATE_KEY="$3"
+    local RESTORE_PUBLIC_KEY="$4"
     
     if [[ -z "$CLIENT_NAME" ]] || [[ -z "$CLIENT_IP" ]]; then
         print_error "Не указано имя клиента или IP"
@@ -288,43 +290,28 @@ create_client_config() {
     local CLIENT_DIR="/root/wireguard-clients/$CLIENT_NAME"
     mkdir -p "$CLIENT_DIR"
     
-    # Проверяем, есть ли сохраненные ключи клиента в конфиге
-    config_file="./config/main.conf"
-    client_key_var="VPN_CLIENT_${CLIENT_NAME^^}_PRIVATE_KEY"
-    client_key_var="${client_key_var//-/_}"  # Заменяем дефисы на подчеркивания
+    local CLIENT_PRIVATE_KEY
+    local CLIENT_PUBLIC_KEY
     
-    if [[ -f "$config_file" ]]; then
-        saved_client_key=$(grep "^${client_key_var}=" "$config_file" 2>/dev/null | cut -d'=' -f2- | tr -d '"')
-    fi
-    
-    if [[ -n "$saved_client_key" ]]; then
-        # Восстанавливаем ключи из конфига
-        echo "$saved_client_key" > "$CLIENT_DIR/private.key"
+    # Если переданы ключи для восстановления - используем их
+    if [[ -n "$RESTORE_PRIVATE_KEY" ]] && [[ -n "$RESTORE_PUBLIC_KEY" ]]; then
+        echo "$RESTORE_PRIVATE_KEY" > "$CLIENT_DIR/private.key"
+        echo "$RESTORE_PUBLIC_KEY" > "$CLIENT_DIR/public.key"
         chmod 600 "$CLIENT_DIR/private.key"
-        echo "$saved_client_key" | wg pubkey > "$CLIENT_DIR/public.key"
         
-        local CLIENT_PRIVATE_KEY="$saved_client_key"
-        local CLIENT_PUBLIC_KEY=$(cat "$CLIENT_DIR/public.key")
+        CLIENT_PRIVATE_KEY="$RESTORE_PRIVATE_KEY"
+        CLIENT_PUBLIC_KEY="$RESTORE_PUBLIC_KEY"
         
-        log_info "Ключи клиента $CLIENT_NAME восстановлены из конфигурации"
+        log_info "Ключи клиента $CLIENT_NAME восстановлены из VPN_DEFAULT_CLIENTS"
     else
         # Генерация новых ключей клиента
         wg genkey | tee "$CLIENT_DIR/private.key" | wg pubkey > "$CLIENT_DIR/public.key"
         chmod 600 "$CLIENT_DIR/private.key"
         
-        local CLIENT_PRIVATE_KEY=$(cat "$CLIENT_DIR/private.key")
-        local CLIENT_PUBLIC_KEY=$(cat "$CLIENT_DIR/public.key")
+        CLIENT_PRIVATE_KEY=$(cat "$CLIENT_DIR/private.key")
+        CLIENT_PUBLIC_KEY=$(cat "$CLIENT_DIR/public.key")
         
-        # Сохраняем приватный ключ клиента в конфиг
-        if [[ -f "$config_file" ]]; then
-            if ! grep -q "^${client_key_var}=" "$config_file"; then
-                echo "${client_key_var}=\"$CLIENT_PRIVATE_KEY\"" >> "$config_file"
-                log_info "Ключ клиента $CLIENT_NAME добавлен в конфигурацию"
-            else
-                sed -i "s|^${client_key_var}=\".*\"|${client_key_var}=\"$CLIENT_PRIVATE_KEY\"|" "$config_file"
-                log_info "Ключ клиента $CLIENT_NAME обновлен в конфигурации"
-            fi
-        fi
+        log_info "Новые ключи сгенерированы для клиента $CLIENT_NAME"
     fi
     
     # Создание конфигурации клиента
@@ -416,10 +403,53 @@ EOF
         done
     fi
     
-    # Создаём первого клиента только если нет ни одного
-    if [[ $restored_clients -eq 0 ]] && [[ ! -d "/root/wireguard-clients/$VPN_DEFAULT_CLIENT" ]]; then
-        print_info "Создание клиента по умолчанию: $VPN_DEFAULT_CLIENT"
-        create_client_config "$VPN_DEFAULT_CLIENT" "10.8.0.2"
+    # Создаём клиентов по умолчанию из VPN_DEFAULT_CLIENTS
+    if [[ $restored_clients -eq 0 ]]; then
+        print_info "Создание клиентов по умолчанию из VPN_DEFAULT_CLIENTS"
+        
+        # Парсим VPN_DEFAULT_CLIENTS формата "user1:priv:pub,user2:priv:pub"
+        IFS=',' read -ra CLIENTS <<< "$VPN_DEFAULT_CLIENTS"
+        client_index=2  # Начинаем с 10.8.0.2
+        
+        declare -a new_clients_data  # Массив для сохранения обновленных данных
+        
+        for client_entry in "${CLIENTS[@]}"; do
+            IFS=':' read -r client_name client_private client_public <<< "$client_entry"
+            
+            if [[ -z "$client_name" ]]; then
+                continue
+            fi
+            
+            client_ip="10.8.0.$client_index"
+            
+            # Создаем клиента с восстановлением ключей если они есть
+            if [[ -n "$client_private" ]] && [[ -n "$client_public" ]]; then
+                create_client_config "$client_name" "$client_ip" "$client_private" "$client_public"
+                # Сохраняем с существующими ключами
+                new_clients_data+=("$client_name:$client_private:$client_public")
+            else
+                create_client_config "$client_name" "$client_ip"
+                # Читаем сгенерированные ключи
+                new_private=$(cat "/root/wireguard-clients/$client_name/private.key")
+                new_public=$(cat "/root/wireguard-clients/$client_name/public.key")
+                new_clients_data+=("$client_name:$new_private:$new_public")
+            fi
+            
+            ((client_index++))
+        done
+        
+        # Сохраняем обновленные данные клиентов обратно в конфиг
+        config_file="./config/main.conf"
+        if [[ -f "$config_file" ]] && [[ ${#new_clients_data[@]} -gt 0 ]]; then
+            # Формируем новую строку VPN_DEFAULT_CLIENTS
+            new_clients_string=$(IFS=','; echo "${new_clients_data[*]}")
+            
+            if grep -q "^VPN_DEFAULT_CLIENTS=" "$config_file"; then
+                sed -i "s|^VPN_DEFAULT_CLIENTS=\".*\"|VPN_DEFAULT_CLIENTS=\"$new_clients_string\"|" "$config_file"
+                log_info "VPN_DEFAULT_CLIENTS обновлен с ключами клиентов"
+                print_success "Ключи клиентов сохранены в конфигурацию"
+            fi
+        fi
     fi
 fi
 
@@ -744,13 +774,25 @@ print_info "Подсеть: $VPN_SUBNET/$VPN_CIDR"
 
 if [[ "$DRY_RUN" != "true" ]]; then
     print_info ""
-    print_info "Клиент по умолчанию: $VPN_DEFAULT_CLIENT"
-    print_info "Конфигурация: /root/wireguard-clients/$VPN_DEFAULT_CLIENT/"
+    print_info "Созданные клиенты по умолчанию:"
     
-    if [[ -f "/root/wireguard-clients/$VPN_DEFAULT_CLIENT/$VPN_DEFAULT_CLIENT-qr.txt" ]]; then
+    # Парсим VPN_DEFAULT_CLIENTS для показа списка
+    IFS=',' read -ra CLIENTS <<< "$VPN_DEFAULT_CLIENTS"
+    for client_entry in "${CLIENTS[@]}"; do
+        IFS=':' read -r client_name _ _ <<< "$client_entry"
+        if [[ -n "$client_name" ]] && [[ -d "/root/wireguard-clients/$client_name" ]]; then
+            client_ip=$(grep "Address = " "/root/wireguard-clients/$client_name/$client_name.conf" 2>/dev/null | awk '{print $3}' | cut -d'/' -f1)
+            print_info "  • $client_name ($client_ip)"
+            print_info "    Конфигурация: /root/wireguard-clients/$client_name/"
+        fi
+    done
+    
+    # Показываем QR-код для первого клиента
+    IFS=':' read -r first_client _ _ <<< "${CLIENTS[0]}"
+    if [[ -n "$first_client" ]] && [[ -f "/root/wireguard-clients/$first_client/$first_client-qr.txt" ]]; then
         print_info ""
-        print_info "QR-код для подключения:"
-        cat "/root/wireguard-clients/$VPN_DEFAULT_CLIENT/$VPN_DEFAULT_CLIENT-qr.txt"
+        print_info "QR-код для подключения ($first_client):"
+        cat "/root/wireguard-clients/$first_client/$first_client-qr.txt"
     fi
 fi
 
@@ -758,7 +800,17 @@ log_info "━━━━━━━━━━━━━━━━━━━━━━━�
 log_info "WireGuard VPN настроен:"
 log_info "  URL: $VPN_URL:$VPN_PORT"
 log_info "  Подсеть: $VPN_SUBNET/$VPN_CIDR"
-log_info "  Клиент: $VPN_DEFAULT_CLIENT"
+
+# Логируем всех клиентов
+if [[ "$DRY_RUN" != "true" ]]; then
+    IFS=',' read -ra CLIENTS <<< "$VPN_DEFAULT_CLIENTS"
+    for client_entry in "${CLIENTS[@]}"; do
+        IFS=':' read -r client_name _ _ <<< "$client_entry"
+        if [[ -n "$client_name" ]]; then
+            log_info "  Клиент: $client_name"
+        fi
+    done
+fi
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # --- Команды управления ---
