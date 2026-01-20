@@ -295,7 +295,7 @@ server {
     }
 
     # Запретить доступ к конфигурационным директориям
-    location ~ ^/(config|temp|logs|SQL|bin|program)/ {
+    location ~ ^/(config|temp|logs|SQL|bin)/ {
         deny all;
     }
 
@@ -408,7 +408,7 @@ server {
     }
 
     # Запретить доступ к конфигурационным директориям
-    location ~ ^/(config|temp|logs|SQL|bin|program)/ {
+    location ~ ^/(config|temp|logs|SQL|bin)/ {
         deny all;
     }
 
