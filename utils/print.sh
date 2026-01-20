@@ -8,16 +8,17 @@ UTIL_PRINT_LOADED=true
 # Определяем директорию скрипта
 SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
-# Если LOG_DIR не задана или пустая, используем директорию скрипта
-if [[ -z "${LOG_DIR+x}" ]] || [[ -z "${LOG_DIR}" ]]; then
-    LOG_DIR="$SCRIPT_DIR/logs"
-elif [[ "${LOG_DIR}" != /* ]]; then
-    # Если путь относительный (не начинается с /), делаем его относительно SCRIPT_DIR
-    LOG_DIR="$SCRIPT_DIR/${LOG_DIR}"
-fi
-
-# Создаем директорию для логов если её нет
-mkdir -p "$LOG_DIR" 2>/dev/null || true
+# Функция для инициализации LOG_DIR (вызывается после загрузки конфига)
+_init_log_dir() {
+    if [[ -z "${LOG_DIR+x}" ]] || [[ -z "${LOG_DIR}" ]]; then
+        LOG_DIR="$SCRIPT_DIR/logs"
+    elif [[ "${LOG_DIR}" != /* ]]; then
+        # Если путь относительный (не начинается с /), делаем его относительно SCRIPT_DIR
+        LOG_DIR="$SCRIPT_DIR/${LOG_DIR}"
+    fi
+    # Создаем директорию для логов если её нет
+    mkdir -p "$LOG_DIR" 2>/dev/null || true
+}
 
 : "${CONSOLE_LOG_FILE:=console.log}"
 : "${ENABLE_CONSOLE_LOG:=false}"
@@ -79,6 +80,9 @@ get_color() {
 # Запись в консольный лог (без цветов)
 _write_console_log() {
     [[ "${ENABLE_CONSOLE_LOG:-false}" != "true" ]] && return 0
+    
+    # Инициализируем LOG_DIR если ещё не инициализирована
+    [[ -z "${LOG_DIR}" ]] && _init_log_dir
     
     local message="$1"
     local console_path
