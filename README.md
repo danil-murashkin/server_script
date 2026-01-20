@@ -205,8 +205,9 @@ LOG_LEVEL="INFO"                    # DEBUG, INFO, WARN, ERROR
 ```bash
 ENABLE_UFW=true                     # Включить firewall
 ENABLE_FAIL2BAN=true                # Защита от брутфорса
-SSL_PROVIDER="letsencrypt"          # letsencrypt или self-signed
+SSL_PROVIDER="letsencrypt"          # letsencrypt, self-signed, custom (коммрческие)
 ENABLE_SSL=true                     # Включить SSL/TLS
+SSL_RENEWAL_DAYS=30
 SSL_USE_STAGING=false               # Тестовые сертификаты
 ```
 
