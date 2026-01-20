@@ -22,6 +22,7 @@ print_step()   { echo -e "${BLUE}${BOLD}🔧 [STEP]${RESET}  $*"; }
 # Парсинг параметров
 INSTALL_DIR="${HOME}"
 INSTALL_ARGS=()  # Массив для аргументов install.sh
+BACKGROUND_MODE=false
 
 for arg in "$@"; do
     case $arg in
@@ -32,6 +33,9 @@ for arg in "$@"; do
         --install|-install)
             AUTO_INSTALL=true
             # Не добавляем в INSTALL_ARGS - это параметр только для bootstrap
+            ;;
+        --background)
+            BACKGROUND_MODE=true
             ;;
         *)
             # Все остальные параметры передаем в install.sh
@@ -650,7 +654,12 @@ if [[ "$AUTO_INSTALL" == "true" ]]; then
     export PROJECT_DIR="$INSTALL_SCRIPT_DIR"
 
     # Запускаем с обработкой ошибок
-    if ! bash "$INSTALL_SCRIPT" "${INSTALL_ARGS[@]}"; then
+    if [[ "$BACKGROUND_MODE" == "true" ]]; then
+        nohup bash "$INSTALL_SCRIPT" "${INSTALL_ARGS[@]}" </dev/null >> "$BOOTSTRAP_LOG_FILE" 2>&1 &
+        print_success "Установка запущена в фоне (PID: $!)"
+        print_info "Следите за логами: tail -f $BOOTSTRAP_LOG_FILE"
+        exit 0
+    elif ! bash "$INSTALL_SCRIPT" "${INSTALL_ARGS[@]}"; then
         print_error "Установка завершилась с ошибкой"
         log_to_file "ERROR: install.sh exited with error code $?"
         print_info "Логи доступны в: $BOOTSTRAP_LOG_FILE"
