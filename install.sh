@@ -76,7 +76,7 @@ parse_args() {
   - Логи: \$LOG_DIR/\$LOG_FILE и \$LOG_DIR/\$CONSOLE_LOG_FILE
 
 Просмотр логов в реальном времени:
-  tail -f /var/log/server-installer/server-script-console.log
+  tail -f ./logs/server-script-console.log
 EOF
                 exit 0
                 ;;
@@ -93,6 +93,16 @@ initialize() {
 
     # === ВАЖНО: load_config ДО init_logging ===
     load_config "$CONFIG_FILE"
+
+    # Пересчитываем LOG_DIR после загрузки конфига
+    if [[ -z "${LOG_DIR+x}" ]] || [[ -z "${LOG_DIR}" ]]; then
+        LOG_DIR="$PROJECT_DIR/logs"
+    elif [[ "${LOG_DIR}" != /* ]]; then
+        # Если путь относительный (не начинается с /), делаем его относительно PROJECT_DIR
+        LOG_DIR="$PROJECT_DIR/${LOG_DIR}"
+    fi
+    # Создаем директорию для логов
+    mkdir -p "$LOG_DIR" 2>/dev/null || true
 
     # Применение параметров из конфига (если не переопределены через командную строку)
     [[ "$ARG_DEBUG" == "false" ]] && DEBUG_MODE="${DEBUG_MODE:-false}"
@@ -336,18 +346,25 @@ main() {
         
         # Загружаем конфиг для получения LOG_DIR
         [[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE" 2>/dev/null || true
-        
+
+        # Пересчитываем LOG_DIR после загрузки конфига
+        if [[ -z "${LOG_DIR+x}" ]] || [[ -z "${LOG_DIR}" ]]; then
+            LOG_DIR="$PROJECT_DIR/logs"
+        elif [[ "${LOG_DIR}" != /* ]]; then
+            # Если путь относительный (не начинается с /), делаем его относительно PROJECT_DIR
+            LOG_DIR="$PROJECT_DIR/${LOG_DIR}"
+        fi
+        # Создаем директорию для логов
+        mkdir -p "$LOG_DIR" 2>/dev/null || true
+
         echo ""
         print_info "Запуск установки в фоновом режиме..."
-        print_info "Лог событий: ${LOG_DIR:-.}/${LOG_FILE:-server-script-install.log}"
-        print_info "Лог консоли: ${LOG_DIR:-.}/${CONSOLE_LOG_FILE:-server-script-console.log}"
+        print_info "Лог событий: ${LOG_DIR}/${LOG_FILE:-install.log}"
+        print_info "Лог консоли: ${LOG_DIR}/${CONSOLE_LOG_FILE:-console.log}"
         echo ""
         print_info "Для просмотра логов в реальном времени используйте:"
-        print_step "tail -f ${LOG_DIR:-.}/${CONSOLE_LOG_FILE:-server-script-console.log}"
+        print_step "tail -f ${LOG_DIR}/${CONSOLE_LOG_FILE:-console.log}"
         echo ""
-        
-        # Создаём директорию для логов
-        [[ -n "${LOG_DIR}" ]] && mkdir -p "${LOG_DIR}" 2>/dev/null || true
         
         # Запуск в фоне с nohup
         touch /tmp/installer_bg_running

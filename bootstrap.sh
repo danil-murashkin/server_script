@@ -19,31 +19,49 @@ print_warning(){ echo -e "${YELLOW}${BOLD}⚠️  [WARN]${RESET}  $*"; }
 print_error()  { echo -e "${RED}${BOLD}❌ [ERROR]${RESET} $*"; }
 print_step()   { echo -e "${BLUE}${BOLD}🔧 [STEP]${RESET}  $*"; }
 
-# Путь к логу — в домашнюю директорию
-LOG_FILE="${HOME:-/root}/server-installer.log"
+# Парсинг параметров
+INSTALL_DIR="${HOME}"
+INSTALL_ARGS=()  # Массив для аргументов install.sh
+
+for arg in "$@"; do
+    case $arg in
+        --install_dir=*)
+            INSTALL_DIR="${arg#*=}"
+            # Не добавляем в INSTALL_ARGS - это параметр только для bootstrap
+            ;;
+        --install|-install)
+            AUTO_INSTALL=true
+            # Не добавляем в INSTALL_ARGS - это параметр только для bootstrap
+            ;;
+        *)
+            # Все остальные параметры передаем в install.sh
+            INSTALL_ARGS+=("$arg")
+            ;;
+    esac
+done
 
 # Настройки репозитория
 REPO_BRANCH="${REPO_BRANCH:-main}"
 REPO_URL="https://github.com/danil-murashkin/server_script.git"
 REPO_URL_ALT="https://raw.githubusercontent.com/danil-murashkin/server_script/${REPO_BRANCH}"
-TEMP_DIR="$HOME/server_script"
-INSTALL_SCRIPT="$TEMP_DIR/install.sh"
+INSTALL_SCRIPT_DIR="$INSTALL_DIR/server_script"
+INSTALL_SCRIPT="$INSTALL_SCRIPT_DIR/install.sh"
 
-# Проверка параметра --install
-AUTO_INSTALL=false
-for arg in "$@"; do
-    case $arg in
-        --install|-install)
-            AUTO_INSTALL=true
-            shift
-            ;;
-    esac
-done
+# Создаем директории и их очистку заранее
+rm -rf "$INSTALL_SCRIPT_DIR"
+mkdir -p "$INSTALL_SCRIPT_DIR" || {
+    print_error "Не удалось создать: $INSTALL_SCRIPT_DIR"
+    exit 1
+}
+mkdir -p "$INSTALL_SCRIPT_DIR/logs" 2>/dev/null || true
+
+# Путь к логу
+BOOTSTRAP_LOG_FILE="$INSTALL_SCRIPT_DIR/logs/bootstrap.log"
 
 # Функция логирования
 log_to_file() {
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    echo "[$timestamp] [BOOTSTRAP] $*" >> "$LOG_FILE" 2>/dev/null || true
+    echo "[$timestamp] [BOOTSTRAP] $*" >> "$BOOTSTRAP_LOG_FILE" 2>/dev/null || true
 }
 
 # === Функция проверки интернет соединения ===
@@ -167,11 +185,11 @@ download_via_curl() {
         "utils/logging.sh"
     )
     
-    mkdir -p "$TEMP_DIR"/{config,utils,modules}
+    mkdir -p "$INSTALL_SCRIPT_DIR"/{config,utils,modules}
     
     for file in "${files[@]}"; do
         local url="$REPO_URL_ALT/$file"
-        local dest="$TEMP_DIR/$file"
+        local dest="$INSTALL_SCRIPT_DIR/$file"
         
         print_info "Скачивание: $file"
         if curl -sSL --connect-timeout 10 --max-time 60 "$url" -o "$dest"; then
@@ -211,7 +229,7 @@ download_via_curl() {
     
     for module in "${modules[@]}"; do
         local url="$REPO_URL_ALT/modules/$module"
-        local dest="$TEMP_DIR/modules/$module"
+        local dest="$INSTALL_SCRIPT_DIR/modules/$module"
         
         if curl -sSL --connect-timeout 10 --max-time 60 "$url" -o "$dest" 2>/dev/null; then
             print_info "Модуль скачан: $module"
@@ -478,11 +496,7 @@ check_github_access && github_status=$? || github_status=$?
 
 # === Скачивание установщика ===
 print_step "Скачивание установщика..."
-rm -rf "$TEMP_DIR"
-mkdir -p "$TEMP_DIR" || {
-    print_error "Не удалось создать: $TEMP_DIR"
-    exit 1
-}
+
 
 case $github_status in
     0)
@@ -490,7 +504,7 @@ case $github_status in
         print_info "Клонирование через git..."
         log_to_file "Attempting git clone from $REPO_URL"
         
-        if timeout 120 git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$TEMP_DIR" 2>/dev/null; then
+        if timeout 120 git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$INSTALL_SCRIPT_DIR" 2>/dev/null; then
             print_success "Репозиторий клонирован"
             log_to_file "Git clone: SUCCESS"
         else
@@ -590,8 +604,8 @@ if [[ ! -f "$INSTALL_SCRIPT" ]]; then
     print_error "Файл install.sh не найден после скачивания"
     log_to_file "ERROR: install.sh not found after download"
     
-    print_info "Содержимое $TEMP_DIR:"
-    ls -la "$TEMP_DIR" 2>/dev/null || print_error "Директория $TEMP_DIR не существует"
+    print_info "Содержимое $INSTALL_SCRIPT_DIR:"
+    ls -la "$INSTALL_SCRIPT_DIR" 2>/dev/null || print_error "Директория $INSTALL_SCRIPT_DIR не существует"
     exit 1
 fi
 
@@ -603,10 +617,10 @@ print_step "Финальные проверки..."
 
 # Проверяем наличие основных файлов
 required_files=(
-    "$TEMP_DIR/utils/print.sh"
-    "$TEMP_DIR/utils/functions.sh"
-    "$TEMP_DIR/utils/logging.sh"
-    "$TEMP_DIR/config/main.conf"
+    "$INSTALL_SCRIPT_DIR/utils/print.sh"
+    "$INSTALL_SCRIPT_DIR/utils/functions.sh"
+    "$INSTALL_SCRIPT_DIR/utils/logging.sh"
+    "$INSTALL_SCRIPT_DIR/config/main.conf"
 )
 
 for file in "${required_files[@]}"; do
@@ -621,38 +635,38 @@ done
 # === Условный запуск установки ===
 if [[ "$AUTO_INSTALL" == "true" ]]; then
     # === Запуск установки ===
-    log_to_file "=== Launching install.sh with args: $* ==="
-    log_to_file "Working directory: $TEMP_DIR"
+    log_to_file "=== Launching install.sh with args: ${INSTALL_ARGS[*]} ==="
+    log_to_file "Working directory: $INSTALL_SCRIPT_DIR"
     log_to_file "Install script: $INSTALL_SCRIPT"
 
     print_success "🚀 Запуск установки..."
-    cd "$TEMP_DIR" || {
-        print_error "Не удалось перейти в $TEMP_DIR"
+    cd "$INSTALL_SCRIPT_DIR" || {
+        print_error "Не удалось перейти в $INSTALL_SCRIPT_DIR"
         exit 1
     }
 
     # Экспортируем переменные для install.sh
     export FORCE_MODE="${FORCE_MODE:-false}"
-    export PROJECT_DIR="$TEMP_DIR"
+    export PROJECT_DIR="$INSTALL_SCRIPT_DIR"
 
     # Запускаем с обработкой ошибок
-    if ! bash "$INSTALL_SCRIPT" "$@"; then
+    if ! bash "$INSTALL_SCRIPT" "${INSTALL_ARGS[@]}"; then
         print_error "Установка завершилась с ошибкой"
         log_to_file "ERROR: install.sh exited with error code $?"
-        print_info "Логи доступны в: $LOG_FILE"
-        print_info "Рабочая директория сохранена в: $TEMP_DIR"
+        print_info "Логи доступны в: $BOOTSTRAP_LOG_FILE"
+        print_info "Рабочая директория сохранена в: $INSTALL_SCRIPT_DIR"
         exit 1
     fi
 
     print_success "✅ Bootstrap завершён успешно"
     log_to_file "Bootstrap completed successfully"
 else
-    print_success "📦 Все файлы скачаны в: $TEMP_DIR"
+    print_success "📦 Все файлы скачаны в: $INSTALL_SCRIPT_DIR"
     print_info "Для запуска установки выполните:"
-    print_info "  cd $TEMP_DIR"
+    print_info "  cd $INSTALL_SCRIPT_DIR"
     print_info "  bash install.sh [опции]"
     print_info ""
     print_info "Или используйте --install для автозапуска:"
     print_info "  curl -sSL ...bootstrap.sh | bash -s -- --install"
-    log_to_file "Bootstrap completed, files downloaded to: $TEMP_DIR"
+    log_to_file "Bootstrap completed, files downloaded to: $INSTALL_SCRIPT_DIR"
 fi
