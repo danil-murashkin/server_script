@@ -368,7 +368,7 @@ main() {
         
         # Запуск в фоне с nohup
         touch /tmp/installer_bg_running
-        nohup "$0" "${ORIGINAL_ARGS[@]}" --no-detach </dev/null >/dev/null 2>&1 &
+        setsid "$0" "${ORIGINAL_ARGS[@]}" --no-detach </dev/null >>"${LOG_DIR}/${CONSOLE_LOG_FILE:-console.log}" 2>&1 &
         BACKGROUND_PID=$!
         echo "$BACKGROUND_PID" > /tmp/installer_bg_running
         
