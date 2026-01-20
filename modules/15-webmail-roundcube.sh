@@ -92,7 +92,7 @@ fi
 
 # Удаляем логотип из шаблона входа
 if [[ -f "$ROUNDCUBE_DIR/skins/elastic/templates/login.html" ]]; then
-    sed -i 's|<img src="skins/elastic/images/logo.svg.*alt="Logo">|<!-- Logo removed -->|g' "$ROUNDCUBE_DIR/skins/elastic/templates/login.html"
+    sed -i 's|<img src="skins/elastic/images/logo.svg.*alt="Logo">|<!-- Logo removed --><br><br><br><br><br><br><br>|g' "$ROUNDCUBE_DIR/skins/elastic/templates/login.html"
     log_info "Roundcube logo removed from login page"
 fi
 
