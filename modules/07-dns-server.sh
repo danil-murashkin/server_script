@@ -169,6 +169,7 @@ mailadmin IN      A       ${SERVER_IP}
 webmail   IN      A       ${SERVER_IP}
 cloud     IN      A       ${SERVER_IP}
 vpn       IN      A       ${SERVER_IP}
+proxy     IN      A       ${SERVER_IP}
 test      IN      A       ${SERVER_IP}
 EOF
 
