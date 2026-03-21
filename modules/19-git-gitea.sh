@@ -1,5 +1,5 @@
 #!/bin/bash
-# modules/18-git-gitea.sh - Установка и настройка Git-сервера Gitea
+# modules/19-git-gitea.sh - Установка и настройка Git-сервера Gitea
 # Часть Server Deployment Module System
 
 # --- Загрузка вспомогательных утилит ---
@@ -780,4 +780,4 @@ log_info "  SSH: git@$GITEA_DOMAIN:$GITEA_SSH_PORT"
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 print_success "✅ Модуль Git-сервера (Gitea) завершён"
-log_info "Модуль 18-git-gitea.sh завершён успешно"
+log_info "Модуль 19-git-gitea.sh завершён успешно"

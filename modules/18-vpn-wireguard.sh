@@ -1,5 +1,5 @@
 #!/bin/bash
-# modules/17-vpn-wireguard.sh - Установка и настройка VPN-сервера WireGuard
+# modules/18-vpn-wireguard.sh - Установка и настройка VPN-сервера WireGuard
 # Часть Server Deployment Module System
 # Обеспечивает безопасное VPN-подключение с современным протоколом WireGuard
 
@@ -831,4 +831,4 @@ print_info "Конфигурации клиентов:"
 print_info "  /root/wireguard-clients/"
 
 print_success "✅ Модуль VPN-сервера (WireGuard) завершён"
-log_info "Модуль 17-vpn-wireguard.sh завершён успешно"
+log_info "Модуль 18-vpn-wireguard.sh завершён успешно"

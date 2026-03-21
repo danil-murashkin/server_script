@@ -1,5 +1,5 @@
 #!/bin/bash
-# modules/19-cloud-nextcloud.sh - Установка и настройка облачного хранилища NextCloud
+# modules/20-cloud-nextcloud.sh - Установка и настройка облачного хранилища NextCloud
 # Часть Server Deployment Module System
 
 # --- Загрузка вспомогательных утилит ---
@@ -761,4 +761,4 @@ log_info "  Version: $NEXTCLOUD_VERSION"
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 print_success "✅ Модуль облачного хранилища (NextCloud) завершён"
-log_info "Модуль 19-cloud-nextcloud.sh завершён успешно"
+log_info "Модуль 20-cloud-nextcloud.sh завершён успешно"

@@ -224,10 +224,11 @@ download_via_curl() {
         "13-mail-dovecot.sh"
         "14-webadmin-postfixadmin.sh"
         "15-webmail-roundcube.sh"
-        "16-proxy-squid.sh"
-        "17-vpn-wireguard.sh"
-        "18-git-gitea.sh"
-        "19-cloud-nextcloud.sh"
+        "16-proxy-http-squid.sh"
+        "17-proxy-socks-dante.sh"
+        "18-vpn-wireguard.sh"
+        "19-git-gitea.sh"
+        "20-cloud-nextcloud.sh"
         "99-system-check.sh"
     )
     

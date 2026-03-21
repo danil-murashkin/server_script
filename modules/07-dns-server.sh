@@ -174,8 +174,8 @@ test      IN      A       ${SERVER_IP}
 EOF
 
 if [[ $? -eq 0 ]]; then
-    print_success "Зонный файл создан (включая git.$DOMAIN)"
-    log_info "Zone file created: /etc/bind/zones/db.$DOMAIN (includes git.$DOMAIN)"
+    print_success "Зонный файл создан"
+    log_info "Zone file created: /etc/bind/zones/db.$DOMAIN"
 else
     print_error "Не удалось создать зонный файл"
     log_error "Failed to create zone file"

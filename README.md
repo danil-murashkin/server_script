@@ -1,6 +1,6 @@
 # Развёртка универсального сервера
 
-Автоматизированная система развёртывания полнофункционального сервера на базе Debian 11+. Включает DNS, веб-сервер, базу данных, почтовый сервер с DKIM/SPF/DMARC, веб-интерфейсы управления, прокси-сервер и VPN.
+Автоматизированная система развёртывания полнофункционального сервера на базе Debian 11+. Включает DNS, веб-сервер, базу данных, почтовый сервер с DKIM/SPF/DMARC, веб-интерфейсы управления, HTTP и SOCKS5 прокси-серверы, VPN.
 
 ## Установка
 
@@ -113,7 +113,7 @@ LOG_LEVEL="INFO"                      # Уровень детализации
 - **RAM**: минимум 2GB (рекомендуется 4GB+)
 - **Диск**: минимум 20GB свободного места
 - **Права**: root доступ
-- **Сеть**: статический IP, открытые порты 22, 25, 80, 443, 587, 993, 995, 3128, 51820
+- **Сеть**: статический IP, открытые порты 22, 25, 80, 443, 587, 993, 995, 1080, 3128, 51820
 
 ## Что устанавливается
 
@@ -134,7 +134,8 @@ LOG_LEVEL="INFO"                      # Уровень детализации
 - **Roundcube** - веб-почта с современным интерфейсом
 
 ### Сетевые сервисы
-- **Прокси-сервер** (Squid) для HTTP/HTTPS туннелирования
+- **HTTP/HTTPS прокси** (Squid) для туннелирования веб-трафика
+- **SOCKS5 прокси** (Dante) для универсального туннелирования
 - **VPN-сервер** (WireGuard) для безопасного удалённого доступа
 
 ### Дополнительные сервисы
@@ -175,10 +176,11 @@ server_script/
     ├── 13-mail-dovecot.sh          # IMAP/POP3 сервер Dovecot
     ├── 14-webadmin-postfixadmin.sh # Веб-админка почты PostfixAdmin
     ├── 15-webmail-roundcube.sh     # Веб-почта Roundcube
-    ├── 16-proxy-squid.sh           # HTTP/HTTPS прокси-сервер Squid
-    ├── 17-vpn-wireguard.sh         # VPN сервер WireGuard
-    ├── 18-git-gitea.sh             # Git сервер Gitea
-    ├── 19-cloud-nextcloud.sh       # Облачный сервер NextCloud
+    ├── 16-proxy-http-squid.sh           # HTTP/HTTPS прокси-сервер Squid
+    ├── 17-proxy-socks-dante.sh     # SOCKS5 прокси-сервер Dante
+    ├── 18-vpn-wireguard.sh         # VPN сервер WireGuard
+    ├── 19-git-gitea.sh             # Git сервер Gitea
+    ├── 20-cloud-nextcloud.sh       # Облачный сервер NextCloud
     └── 99-system-check.sh          # Финальная проверка системы
 ```
 
@@ -227,6 +229,15 @@ PROXY_PASSWORD=""                   # Пустое = использовать AD
 HTTP_PROXY_PORT="3128"
 PROXY_SUBDOMAIN="proxy"             # proxy.$DOMAIN
 PROXY_CACHE_SIZE="100"              # MB
+```
+
+#### SOCKS5-прокси (Dante)
+```bash
+ENABLE_SOCKS_PROXY="false"
+SOCKS_USER="socksuser"
+SOCKS_PASSWORD=""                   # Пустое = использовать ADMIN_PASSWORD
+SOCKS_PORT="1080"
+SOCKS_SUBDOMAIN="proxy"             # proxy.$DOMAIN
 ```
 
 #### VPN-сервер (WireGuard)
@@ -345,6 +356,7 @@ ADDITIONAL_MAILBOXES="admin:SecurePass123,info,support:AnotherPass456"
 | Gitea | `https://git.example.com` | 443 | Git-репозитории |
 | NextCloud | `https://cloud.example.com` | 443 | Облачное хранилище |
 | Squid Proxy | `proxy.example.com` | 3128 | HTTP/HTTPS прокси |
+| Dante SOCKS5 | `proxy.example.com` | 1080 | SOCKS5 прокси |
 | WireGuard VPN | `vpn.example.com` | 51820 | VPN-сервер |
 | SSH | `example.com` | 22 | Удаленный доступ |
 | SMTP | `mail.example.com` | 25, 587 | Отправка почты |
@@ -389,7 +401,7 @@ systemctl status dovecot
 
 ### Проверка портов
 ```bash
-ss -tlnp | grep -E ':(80|443|25|587|993|995|3128|51820)'
+ss -tlnp | grep -E ':(80|443|25|587|993|995|1080|3128|51820)'
 ```
 
 ## Безопасность
