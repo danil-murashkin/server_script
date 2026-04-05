@@ -34,8 +34,38 @@ SOCKS_PORT="${SOCKS_PORT:-1080}"
 SOCKS_SUBDOMAIN="${SOCKS_SUBDOMAIN:-proxy}"
 SOCKS_URL="$SOCKS_SUBDOMAIN.$DOMAIN"
 
+# Список учёток (системные пользователи Linux): "user:pass,user2:pass2"; пустой pass → SOCKS_PASSWORD
+SOCKS_USERS_LINE="${SOCKS_DEFAULT_USERS:-${SOCKS_USER}:}"
+
+declare -a SOCKS_ACCOUNT_NAMES=()
+declare -a SOCKS_ACCOUNT_PASSWORDS=()
+
+IFS=',' read -ra _socks_entries <<< "$SOCKS_USERS_LINE"
+for _raw in "${_socks_entries[@]}"; do
+    _entry="${_raw#"${_raw%%[![:space:]]*}"}"
+    _entry="${_entry%"${_entry##*[![:space:]]}"}"
+    [[ -z "$_entry" ]] && continue
+    _name="${_entry%%:*}"
+    _pass="${_entry#*:}"
+    if [[ "$_name" == "$_entry" ]]; then
+        _pass=""
+    fi
+    [[ -z "$_name" ]] && continue
+    [[ -z "$_pass" ]] && _pass="$SOCKS_PASSWORD"
+    SOCKS_ACCOUNT_NAMES+=("$_name")
+    SOCKS_ACCOUNT_PASSWORDS+=("$_pass")
+done
+
+if [[ ${#SOCKS_ACCOUNT_NAMES[@]} -eq 0 ]]; then
+    print_error "Не заданы пользователи SOCKS (SOCKS_DEFAULT_USERS / SOCKS_USER)"
+    log_error "No SOCKS accounts configured"
+    [[ "$FORCE_MODE" != "true" ]] && exit 1
+fi
+
+SOCKS_USER="${SOCKS_ACCOUNT_NAMES[0]}"
+
 log_info "SOCKS5 прокси: $SOCKS_URL:$SOCKS_PORT"
-log_info "Пользователь: $SOCKS_USER"
+log_info "Пользователи (${#SOCKS_ACCOUNT_NAMES[@]}): ${SOCKS_ACCOUNT_NAMES[*]}"
 
 # --- Проверка ОС ---
 ensure_debian || {
@@ -81,34 +111,52 @@ else
     fi
 fi
 
-# --- Создание системного пользователя ---
-print_step "Создание системного пользователя $SOCKS_USER"
+# --- Создание системных пользователей для SOCKS (PAM / username в Dante) ---
+print_step "Создание системных пользователей SOCKS (${#SOCKS_ACCOUNT_NAMES[@]})"
+CONFIG_FILE="./config/main.conf"
+
 if [[ "$DRY_RUN" == "true" ]]; then
-    print_warn "(DRY RUN) Создание пользователя: $SOCKS_USER"
-    log_info "[DRY RUN] Создание пользователя"
+    print_warn "(DRY RUN) Создание пользователей: ${SOCKS_ACCOUNT_NAMES[*]}"
+    log_info "[DRY RUN] Создание пользователей SOCKS"
 else
-    if id "$SOCKS_USER" &>/dev/null; then
-        print_info "Пользователь $SOCKS_USER уже существует — обновление пароля"
-        log_info "User $SOCKS_USER already exists — updating password"
-    else
-        if useradd -r -s /usr/sbin/nologin "$SOCKS_USER" >/dev/null 2>&1; then
-            print_success "Пользователь $SOCKS_USER создан"
-            log_info "User $SOCKS_USER created"
+    for ((i = 0; i < ${#SOCKS_ACCOUNT_NAMES[@]}; i++)); do
+        _suser="${SOCKS_ACCOUNT_NAMES[$i]}"
+        _spass="${SOCKS_ACCOUNT_PASSWORDS[$i]}"
+
+        if id "$_suser" &>/dev/null; then
+            print_info "Пользователь $_suser уже существует — обновление пароля"
+            log_info "User $_suser already exists — updating password"
         else
-            print_error "Ошибка создания пользователя $SOCKS_USER"
-            log_error "useradd $SOCKS_USER failed"
+            if useradd -r -s /usr/sbin/nologin "$_suser" >/dev/null 2>&1; then
+                print_success "Пользователь $_suser создан"
+                log_info "User $_suser created"
+            else
+                print_error "Ошибка создания пользователя $_suser"
+                log_error "useradd $_suser failed"
+                [[ "$FORCE_MODE" != "true" ]] && exit 1
+            fi
+        fi
+
+        if echo "$_suser:$_spass" | chpasswd >/dev/null 2>&1; then
+            print_success "Пароль для $_suser установлен"
+            log_info "Password set for $_suser"
+        else
+            print_error "Ошибка установки пароля для $_suser"
+            log_error "chpasswd failed for $_suser"
             [[ "$FORCE_MODE" != "true" ]] && exit 1
         fi
-    fi
+    done
 
-    # Устанавливаем пароль
-    if echo "$SOCKS_USER:$SOCKS_PASSWORD" | chpasswd >/dev/null 2>&1; then
-        print_success "Пароль для $SOCKS_USER установлен"
-        log_info "Password set for $SOCKS_USER"
+    if [[ -f "$CONFIG_FILE" ]]; then
+        if ! grep -q '^SOCKS_DEFAULT_USERS=' "$CONFIG_FILE" 2>/dev/null; then
+            _saved="${SOCKS_USERS_LINE//\\/\\\\}"
+            _saved="${_saved//\"/\\\"}"
+            echo "SOCKS_DEFAULT_USERS=\"$_saved\"" >> "$CONFIG_FILE"
+            print_success "SOCKS_DEFAULT_USERS добавлен в $CONFIG_FILE"
+            log_info "SOCKS_DEFAULT_USERS appended to main.conf"
+        fi
     else
-        print_error "Ошибка установки пароля для $SOCKS_USER"
-        log_error "chpasswd failed for $SOCKS_USER"
-        [[ "$FORCE_MODE" != "true" ]] && exit 1
+        log_warn "Файл $CONFIG_FILE не найден — список SOCKS не записан"
     fi
 fi
 
@@ -267,17 +315,21 @@ print_step "Информация о SOCKS5-прокси"
 print_info "Адрес:    $SOCKS_URL (или $SERVER_IP)"
 print_info "Порт:     $SOCKS_PORT"
 print_info "Протокол: SOCKS5"
-print_info "Логин:    $SOCKS_USER"
-print_info "Пароль:   ********"
+print_info "Учётные записи (${#SOCKS_ACCOUNT_NAMES[@]}):"
+for ((i = 0; i < ${#SOCKS_ACCOUNT_NAMES[@]}; i++)); do
+    print_info "  • ${SOCKS_ACCOUNT_NAMES[$i]} (пароль: как в main.conf / SOCKS_PASSWORD)"
+done
 print_info ""
-print_info "Строка подключения:"
+print_info "Пример строки подключения (первый пользователь):"
 print_info "  $SERVER_IP:$SOCKS_PORT:$SOCKS_USER:SOCKS_PASSWORD"
 
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 log_info "SOCKS5-прокси настроен:"
 log_info "  URL: $SOCKS_URL:$SOCKS_PORT"
-log_info "  Пользователь: $SOCKS_USER"
-log_info "  Строка подключения: $SERVER_IP:$SOCKS_PORT:$SOCKS_USER:$SOCKS_PASSWORD"
+log_info "  Учётные записи: ${SOCKS_ACCOUNT_NAMES[*]}"
+for ((i = 0; i < ${#SOCKS_ACCOUNT_NAMES[@]}; i++)); do
+    log_info "  SOCKS: ${SOCKS_ACCOUNT_NAMES[$i]} (пароль из SOCKS_DEFAULT_USERS или SOCKS_PASSWORD)"
+done
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # --- Команды управления ---

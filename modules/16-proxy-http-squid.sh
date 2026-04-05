@@ -36,8 +36,39 @@ PROXY_SUBDOMAIN="${PROXY_SUBDOMAIN:-proxy}"
 PROXY_URL="$PROXY_SUBDOMAIN.$DOMAIN"
 PROXY_CACHE_SIZE="${PROXY_CACHE_SIZE:-100}"
 
+# Список пользователей (как VPN_DEFAULT_CLIENTS): "user:pass,user2:pass2"; пустой pass → PROXY_PASSWORD
+PROXY_USERS_LINE="${PROXY_DEFAULT_USERS:-${PROXY_USER}:}"
+
+declare -a PROXY_ACCOUNT_NAMES=()
+declare -a PROXY_ACCOUNT_PASSWORDS=()
+
+IFS=',' read -ra _proxy_entries <<< "$PROXY_USERS_LINE"
+for _raw in "${_proxy_entries[@]}"; do
+    _entry="${_raw#"${_raw%%[![:space:]]*}"}"
+    _entry="${_entry%"${_entry##*[![:space:]]}"}"
+    [[ -z "$_entry" ]] && continue
+    _name="${_entry%%:*}"
+    _pass="${_entry#*:}"
+    if [[ "$_name" == "$_entry" ]]; then
+        _pass=""
+    fi
+    [[ -z "$_name" ]] && continue
+    [[ -z "$_pass" ]] && _pass="$PROXY_PASSWORD"
+    PROXY_ACCOUNT_NAMES+=("$_name")
+    PROXY_ACCOUNT_PASSWORDS+=("$_pass")
+done
+
+if [[ ${#PROXY_ACCOUNT_NAMES[@]} -eq 0 ]]; then
+    print_error "Не заданы пользователи прокси (PROXY_DEFAULT_USERS / PROXY_USER)"
+    log_error "No proxy accounts configured"
+    [[ "$FORCE_MODE" != "true" ]] && exit 1
+fi
+
+# Первый логин — для обратной совместимости с PROXY_USER в выводе и старыми инструкциями
+PROXY_USER="${PROXY_ACCOUNT_NAMES[0]}"
+
 log_info "Прокси: $PROXY_URL:$HTTP_PROXY_PORT"
-log_info "Пользователь: $PROXY_USER"
+log_info "Пользователи (${#PROXY_ACCOUNT_NAMES[@]}): ${PROXY_ACCOUNT_NAMES[*]}"
 
 # --- Проверка ОС ---
 ensure_debian || {
@@ -76,34 +107,55 @@ else
     fi
 fi
 
-# --- Создание пользователя ---
+# --- Создание пользователей Squid (htpasswd) ---
 print_step "Настройка аутентификации"
 PASSWD_FILE="/etc/squid/passwd"
+CONFIG_FILE="./config/main.conf"
 
 if [[ "$DRY_RUN" == "true" ]]; then
-    print_warn "(DRY RUN) Создание пользователя: $PROXY_USER"
-    log_info "[DRY RUN] Создание пользователя прокси"
+    print_warn "(DRY RUN) Создание пользователей Squid: ${PROXY_ACCOUNT_NAMES[*]}"
+    log_info "[DRY RUN] Создание пользователей прокси (${#PROXY_ACCOUNT_NAMES[@]})"
 else
-    log_info "Создание пользователя: $PROXY_USER"
-    
-    # Проверяем, существует ли пользователь
-    if grep -q "^$PROXY_USER:" "$PASSWD_FILE" 2>/dev/null; then
-        print_info "Пользователь $PROXY_USER уже существует — обновление пароля"
-        log_info "User $PROXY_USER already exists — updating password"
-        htpasswd -b "$PASSWD_FILE" "$PROXY_USER" "$PROXY_PASSWORD" >/dev/null 2>&1
-    else
-        if htpasswd -b -c "$PASSWD_FILE" "$PROXY_USER" "$PROXY_PASSWORD" >/dev/null 2>&1; then
-            print_success "Пользователь $PROXY_USER создан"
-            log_info "Пользователь $PROXY_USER создан"
+    log_info "Создание пользователей прокси (${#PROXY_ACCOUNT_NAMES[@]})"
+
+    for ((i = 0; i < ${#PROXY_ACCOUNT_NAMES[@]}; i++)); do
+        _puser="${PROXY_ACCOUNT_NAMES[$i]}"
+        _ppass="${PROXY_ACCOUNT_PASSWORDS[$i]}"
+
+        if [[ $i -eq 0 ]] && { [[ ! -f "$PASSWD_FILE" ]] || [[ ! -s "$PASSWD_FILE" ]]; }; then
+            if ! htpasswd -b -c "$PASSWD_FILE" "$_puser" "$_ppass" >/dev/null 2>&1; then
+                print_error "Ошибка создания файла паролей Squid (пользователь $_puser)"
+                log_error "htpasswd -c failed for $_puser"
+                [[ "$FORCE_MODE" != "true" ]] && exit 1
+            fi
+            print_success "Пользователь $_puser создан (новый файл $PASSWD_FILE)"
+            log_info "Squid htpasswd: created $_puser"
         else
-            print_error "Ошибка создания пользователя"
-            log_error "htpasswd failed"
-            [[ "$FORCE_MODE" != "true" ]] && exit 1
+            if ! htpasswd -b "$PASSWD_FILE" "$_puser" "$_ppass" >/dev/null 2>&1; then
+                print_error "Ошибка добавления/обновления пользователя $_puser"
+                log_error "htpasswd -b failed for $_puser"
+                [[ "$FORCE_MODE" != "true" ]] && exit 1
+            fi
+            print_success "Пользователь $_puser добавлен или обновлён"
+            log_info "Squid htpasswd: updated $_puser"
         fi
-    fi
-    
+    done
+
     chmod 640 "$PASSWD_FILE"
     chown root:proxy "$PASSWD_FILE" 2>/dev/null || chown root:squid "$PASSWD_FILE" 2>/dev/null
+
+    # Сохраняем список учёток в main.conf (если ключа ещё нет), по аналогии с VPN_DEFAULT_CLIENTS
+    if [[ -f "$CONFIG_FILE" ]]; then
+        if ! grep -q '^PROXY_DEFAULT_USERS=' "$CONFIG_FILE" 2>/dev/null; then
+            _saved="${PROXY_USERS_LINE//\\/\\\\}"
+            _saved="${_saved//\"/\\\"}"
+            echo "PROXY_DEFAULT_USERS=\"$_saved\"" >> "$CONFIG_FILE"
+            print_success "PROXY_DEFAULT_USERS добавлен в $CONFIG_FILE"
+            log_info "PROXY_DEFAULT_USERS appended to main.conf"
+        fi
+    else
+        log_warn "Файл $CONFIG_FILE не найден — список пользователей прокси не записан"
+    fi
 fi
 
 # --- Резервная копия конфигурации ---
@@ -322,17 +374,21 @@ fi
 print_step "Информация о прокси-сервере"
 print_info "Адрес:   $PROXY_URL (или $SERVER_IP)"
 print_info "Порт:    $HTTP_PROXY_PORT"
-print_info "Логин:   $PROXY_USER"
-print_info "Пароль:  ********"
+print_info "Учётные записи (${#PROXY_ACCOUNT_NAMES[@]}):"
+for ((i = 0; i < ${#PROXY_ACCOUNT_NAMES[@]}; i++)); do
+    print_info "  • ${PROXY_ACCOUNT_NAMES[$i]} (пароль: как в main.conf / PROXY_PASSWORD)"
+done
 print_info ""
-print_info "Строка подключения:"
+print_info "Пример строки подключения (первый пользователь):"
 print_info "  $SERVER_IP:$HTTP_PROXY_PORT:$PROXY_USER:PROXY_PASSWORD"
 
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 log_info "Прокси-сервер настроен:"
 log_info "  URL: $PROXY_URL:$HTTP_PROXY_PORT"
-log_info "  Пользователь: $PROXY_USER"
-log_info "  Строка подключения: $SERVER_IP:$HTTP_PROXY_PORT:$PROXY_USER:$PROXY_PASSWORD"
+log_info "  Учётные записи: ${PROXY_ACCOUNT_NAMES[*]}"
+for ((i = 0; i < ${#PROXY_ACCOUNT_NAMES[@]}; i++)); do
+    log_info "  Учётная запись: ${PROXY_ACCOUNT_NAMES[$i]} (порт $HTTP_PROXY_PORT; пароль из PROXY_DEFAULT_USERS или PROXY_PASSWORD)"
+done
 log_info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # --- Команды управления ---
