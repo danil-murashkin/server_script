@@ -29,11 +29,11 @@ nano config/main.conf
 # Автоматические значения по умолчанию (ip автоопределяется, email = admin@domain)
 ./install.sh --domain=example.com --password=SecurePass123 --ip="" --email=""
 
-# Установить только определенные модули
-./install.sh --modules="dns,nginx,php"
+# Установить только выбранные модули (имена как у файлов в modules/, без .sh)
+./install.sh --modules="16-proxy-http-squid,17-proxy-socks-dante"
 
-# Пропустить модули
-./install.sh --skip="proxy-squid,vpn-wireguard"
+# Пропустить модули при полной установке
+./install.sh --skip="16-proxy-http-squid,18-vpn-wireguard"
 
 # Режим отладки (DEBUG уровень логирования)
 ./install.sh --debug
@@ -113,7 +113,7 @@ LOG_LEVEL="INFO"                      # Уровень детализации
 - **RAM**: минимум 2GB (рекомендуется 4GB+)
 - **Диск**: минимум 20GB свободного места
 - **Права**: root доступ
-- **Сеть**: статический IP, открытые порты 22, 25, 80, 443, 587, 993, 995, 1080, 3128, 51820
+- **Сеть**: статический IP; порты SSH/веб/почты и при необходимости прокси/VPN — как в `config/main.conf` (типично 22, 25, 80, 443, 587, 993, 995; при включённых Squid/Dante/WireGuard — например 3128, 1080, 51820/udp)
 
 ## Что устанавливается
 
@@ -134,9 +134,9 @@ LOG_LEVEL="INFO"                      # Уровень детализации
 - **Roundcube** - веб-почта с современным интерфейсом
 
 ### Сетевые сервисы
-- **HTTP/HTTPS прокси** (Squid) для туннелирования веб-трафика
-- **SOCKS5 прокси** (Dante) для универсального туннелирования
-- **VPN-сервер** (WireGuard) для безопасного удалённого доступа
+- **HTTP/HTTPS прокси** (Squid), несколько учёток через `PROXY_DEFAULT_USERS`
+- **SOCKS5 прокси** (Dante), несколько системных пользователей через `SOCKS_DEFAULT_USERS`
+- **VPN-сервер** (WireGuard), несколько клиентов и ключи в `VPN_DEFAULT_CLIENTS`; утилита `wg-client`
 
 ### Дополнительные сервисы
 - **Git сервер** (Gitea) для управления репозиториями кода
@@ -215,7 +215,7 @@ LOG_LEVEL="INFO"                    # DEBUG, INFO, WARN, ERROR
 ```bash
 ENABLE_UFW=true                     # Включить firewall
 ENABLE_FAIL2BAN=true                # Защита от брутфорса
-SSL_PROVIDER="letsencrypt"          # letsencrypt, self-signed, custom (коммрческие)
+SSL_PROVIDER="letsencrypt"          # letsencrypt, self-signed, custom (коммерческие)
 ENABLE_SSL=true                     # Включить SSL/TLS
 SSL_RENEWAL_DAYS=30
 SSL_USE_STAGING=false               # Тестовые сертификаты
@@ -224,8 +224,10 @@ SSL_USE_STAGING=false               # Тестовые сертификаты
 #### Прокси-сервер (Squid)
 ```bash
 ENABLE_PROXY="true"
-PROXY_USER="proxyuser"
+PROXY_USER="proxyuser"              # Первый логин из PROXY_DEFAULT_USERS (для совместимости)
 PROXY_PASSWORD=""                   # Пустое = использовать ADMIN_PASSWORD
+# Несколько учёток: "логин:пароль,логин2:пароль2"; пустой пароль после «:» → PROXY_PASSWORD или ADMIN_PASSWORD
+PROXY_DEFAULT_USERS="proxyuser:,webadmin_2:"
 HTTP_PROXY_PORT="3128"
 PROXY_SUBDOMAIN="proxy"             # proxy.$DOMAIN
 PROXY_CACHE_SIZE="100"              # MB
@@ -234,8 +236,10 @@ PROXY_CACHE_SIZE="100"              # MB
 #### SOCKS5-прокси (Dante)
 ```bash
 ENABLE_SOCKS_PROXY="false"
-SOCKS_USER="socksuser"
-SOCKS_PASSWORD=""                   # Пустое = использовать ADMIN_PASSWORD
+SOCKS_USER="socksuser"              # Первый логин из SOCKS_DEFAULT_USERS (системные пользователи Linux)
+SOCKS_PASSWORD=""                   # Пустое = ADMIN_PASSWORD
+# Формат как у HTTP-прокси; пустой пароль после «:» → SOCKS_PASSWORD или ADMIN_PASSWORD
+SOCKS_DEFAULT_USERS="socksuser:,socks2:"
 SOCKS_PORT="1080"
 SOCKS_SUBDOMAIN="proxy"             # proxy.$DOMAIN
 ```
@@ -243,14 +247,29 @@ SOCKS_SUBDOMAIN="proxy"             # proxy.$DOMAIN
 #### VPN-сервер (WireGuard)
 ```bash
 ENABLE_VPN="true"
-VPN_PORT="51820"
+VPN_PORT="51820"                    # UDP; несовпадение с фаерволом — см. UFW на сервере
 VPN_SUBNET="10.8.0.0"
 VPN_CIDR="24"
 VPN_DNS="8.8.8.8, 8.8.4.4"
-VPN_SUBDOMAIN="vpn"                 # vpn.$DOMAIN
-VPN_USER="${ADMIN_USER:-admin}"
-VPN_REDIRECT_GATEWAY="true"         # Full tunnel
-VPN_CLIENT_TO_CLIENT="false"        # Изоляция клиентов
+VPN_SUBDOMAIN="vpn"                 # vpn.$DOMAIN (запись в DNS)
+VPN_USER="${ADMIN_USER:-admin}"     # Имя первого клиента в списке по умолчанию
+
+# Клиенты: "имя:privkey:pubkey,имя2::,имя3::" — пустые поля ключей генерируются при установке
+# и сохраняются в main.conf (как при первом `user::` в списке)
+VPN_DEFAULT_CLIENTS="$VPN_USER::,webadmin_2::"
+
+# Ключи сервера (заполняются модулем; нужны для переустановки без сброса VPN)
+VPN_SERVER_PUBLIC_KEY=""
+VPN_SERVER_PRIVATE_KEY=""
+
+VPN_AUTO_RESTORE_CLIENTS="true"     # Автовосстановление клиентов при переустановке (как в main.conf)
+VPN_MAX_CLIENTS="10"
+VPN_KEEPALIVE="25"                  # Секунды, обход NAT
+VPN_CLIENT_TO_CLIENT="false"        # Клиенты не видят друг друга
+VPN_REDIRECT_GATEWAY="true"         # Весь трафик через VPN (full tunnel)
+VPN_PUSH_ROUTES=""                  # Если REDIRECT_GATEWAY=false — доп. маршруты, через запятую
+
+# Управление после установки: wg-client (add/list/show/remove), конфиги в /root/wireguard-clients/
 ```
 
 #### Git-сервер (Gitea)
@@ -355,9 +374,9 @@ ADDITIONAL_MAILBOXES="admin:SecurePass123,info,support:AnotherPass456"
 | Roundcube | `https://webmail.example.com` | 443 | Веб-почта |
 | Gitea | `https://git.example.com` | 443 | Git-репозитории |
 | NextCloud | `https://cloud.example.com` | 443 | Облачное хранилище |
-| Squid Proxy | `proxy.example.com` | 3128 | HTTP/HTTPS прокси |
-| Dante SOCKS5 | `proxy.example.com` | 1080 | SOCKS5 прокси |
-| WireGuard VPN | `vpn.example.com` | 51820 | VPN-сервер |
+| Squid Proxy | `proxy.example.com` | из `HTTP_PROXY_PORT` (часто 3128) | HTTP/HTTPS прокси, учётки в `PROXY_DEFAULT_USERS` |
+| Dante SOCKS5 | `proxy.example.com` | из `SOCKS_PORT` (часто 1080) | SOCKS5, учётки в `SOCKS_DEFAULT_USERS` |
+| WireGuard VPN | `vpn.example.com` | из `VPN_PORT` (часто 51820, UDP) | Клиенты в `VPN_DEFAULT_CLIENTS`, команда `wg-client` |
 | SSH | `example.com` | 22 | Удаленный доступ |
 | SMTP | `mail.example.com` | 25, 587 | Отправка почты |
 | IMAP | `mail.example.com` | 993 | Получение почты (SSL) |
@@ -392,10 +411,13 @@ systemctl status dovecot
 
 ### Переустановка модуля
 ```bash
-# Установить только один модуль
+# Один модуль (имя файла в modules/ без расширения .sh)
 ./install.sh --modules="08-web-server"
 
-# Или с форсированием
+# Только прокси и VPN после обновления скриптов
+./install.sh --modules="16-proxy-http-squid,17-proxy-socks-dante,18-vpn-wireguard"
+
+# С форсированием (игнорировать ошибки модулей)
 ./install.sh --modules="08-web-server" --force
 ```
 
