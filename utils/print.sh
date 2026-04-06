@@ -78,9 +78,12 @@ get_color() {
 }
 
 # Запись в консольный лог (без цветов)
+# Если stdout не TTY (фоновый >>console.log, pipe, модуль под bash), echo уже попадает в лог;
+# main.conf с ENABLE_CONSOLE_LOG=true иначе дублировал бы каждую строку.
 _write_console_log() {
     [[ "${ENABLE_CONSOLE_LOG:-false}" != "true" ]] && return 0
-    
+    [[ ! -t 1 ]] && return 0
+
     # Инициализируем LOG_DIR если ещё не инициализирована
     [[ -z "${LOG_DIR}" ]] && _init_log_dir
     
@@ -163,7 +166,8 @@ print_step() {
 print_empty_line() {
     echo ""
     [[ "${ENABLE_CONSOLE_LOG:-false}" != "true" ]] && return 0
-    
+    [[ ! -t 1 ]] && return 0
+
     local console_path
     if [[ -z "${LOG_DIR}" ]]; then
         console_path="${CONSOLE_LOG_FILE}"

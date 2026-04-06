@@ -381,10 +381,9 @@ main() {
         exit 0
     fi
     
-    # При --no-detach принудительно включаем логирование в файлы
+    # При --no-detach гарантируем install.log; дубли console.log отключает print.sh ([[ ! -t 1 ]])
     if [[ "$NO_DETACH" == "true" ]]; then
         export ENABLE_LOG_FILE=true
-        export ENABLE_CONSOLE_LOG=true
     fi
     
     initialize
