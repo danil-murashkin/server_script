@@ -5,11 +5,13 @@
 ## Установка
 
 ### Одна команда для полной установки
+
 ```bash
 curl -sSL https://raw.githubusercontent.com/danil-murashkin/server_script/main/bootstrap.sh | bash -s -- --install
 ```
 
 ### Ручная установка с настройкой
+
 ```bash
 curl -sSL https://raw.githubusercontent.com/danil-murashkin/server_script/main/bootstrap.sh | bash && cd server_script
 
@@ -54,6 +56,7 @@ nano config/main.conf
 ### Фоновая установка
 
 При использовании параметра `--background`:
+
 - Процесс запускается в фоне через `nohup`
 - Весь вывод сохраняется в логи
 - Можно закрыть терминал - установка продолжится
@@ -78,20 +81,22 @@ tail -f ~/server_script/logs/install.log
 Система создает несколько типов логов:
 
 ### Bootstrap логи
+
 - **~/server_script/logs/bootstrap.log** - лог загрузки и скачивания файлов
 
 ### Install логи
+
 - **~/server_script/logs/install.log** - структурированный лог событий с метками времени
   - Форматированные записи о ходе установки
   - Уровни: DEBUG, INFO, WARN, ERROR
   - Используется для анализа выполнения модулей
-
 - **~/server_script/logs/console.log** - полный вывод консоли (stdout/stderr)
   - Дублирует весь вывод в консоль включая команды
   - Используется для отладки и полной трассировки
   - Используется в режиме `--background`
 
 Управление логированием через `config/main.conf`:
+
 ```bash
 LOG_DIR="~/server_script/logs"        # Директория логов (по умолчанию)
 LOG_FILE="install.log"                # Имя лога событий
@@ -118,31 +123,37 @@ LOG_LEVEL="INFO"                      # Уровень детализации
 ## Что устанавливается
 
 ### Базовая инфраструктура
+
 - **DNS сервер** (BIND9) с записями для всех сервисов
 - **Веб-сервер** (NGINX) с поддержкой HTTP/2 и SSL
 - **База данных** (PostgreSQL) для всех веб-приложений
 - **PHP 8.2** с необходимыми расширениями и Composer
 
 ### Почтовая система
+
 - **SMTP сервер** (Postfix) с виртуальными доменами
 - **IMAP/POP3** (Dovecot) с поддержкой SSL/TLS
 - **DKIM подписи** (OpenDKIM) для аутентификации
 - **SPF и DMARC** записи для защиты от спама
 
 ### Веб-интерфейсы
+
 - **PostfixAdmin** - управление почтовыми ящиками и доменами
 - **Roundcube** - веб-почта с современным интерфейсом
 
 ### Сетевые сервисы
+
 - **HTTP/HTTPS прокси** (Squid), несколько учёток через `PROXY_DEFAULT_USERS`
 - **SOCKS5 прокси** (Dante), несколько системных пользователей через `SOCKS_DEFAULT_USERS`
 - **VPN-сервер** (WireGuard), несколько клиентов и ключи в `VPN_DEFAULT_CLIENTS`; утилита `wg-client`
 
 ### Дополнительные сервисы
+
 - **Git сервер** (Gitea) для управления репозиториями кода
 - **Облачное хранилище** (NextCloud) для файлов и документов
 
 ### Безопасность
+
 - **UFW Firewall** с настроенными правилами
 - **SSL/TLS сертификаты** (Let's Encrypt или самоподписанные)
 - **Fail2Ban** защита от брутфорса
@@ -189,6 +200,7 @@ server_script/
 ### Основные параметры в `config/main.conf`:
 
 #### Базовые настройки
+
 ```bash
 # Основные настройки и учетная запись
 DOMAIN="example.com"                # Ваш домен
@@ -197,10 +209,13 @@ ADMIN_USER="webadmin"               # Пользователь (не root)
 ADMIN_PASSWORD="SecurePassword123"  # Пароль администратора
 ADMIN_EMAIL="admin@example.com"     # Email администратора
 ADMIN_SSH_KEY=""                    # SSH ключ (рекомендуется)
-DISABLE_ROOT_SSH=true               # Отключить root по SSH
+DISABLE_ROOT_SSH=false              # false = root по SSH как в системе; true — см. примечание ниже
 ```
 
+> При **`DISABLE_ROOT_SSH=true`** в **`/etc/ssh/sshd_config`** выставляется **`PermitRootLogin no`** (пароль root скрипты не меняют). **Вернуть root:** правка **`PermitRootLogin`** в том же файле (`yes` или `prohibit-password`), затем **`systemctl restart ssh`**, в **`main.conf`** — **`false`**.
+
 #### Отладка и логирование
+
 ```bash
 DEBUG_MODE=false                    # Режим отладки
 LOG_DIR="~/server_script/logs"      # Директория логов (по умолчанию)
@@ -212,6 +227,7 @@ LOG_LEVEL="INFO"                    # DEBUG, INFO, WARN, ERROR
 ```
 
 #### Безопасность
+
 ```bash
 ENABLE_UFW=true                     # Включить firewall
 ENABLE_FAIL2BAN=true                # Защита от брутфорса
@@ -222,6 +238,7 @@ SSL_USE_STAGING=false               # Тестовые сертификаты
 ```
 
 #### Прокси-сервер (Squid)
+
 ```bash
 ENABLE_PROXY="true"
 PROXY_USER="proxyuser"              # Первый логин из PROXY_DEFAULT_USERS (для совместимости)
@@ -234,6 +251,7 @@ PROXY_CACHE_SIZE="100"              # MB
 ```
 
 #### SOCKS5-прокси (Dante)
+
 ```bash
 ENABLE_SOCKS_PROXY="false"
 SOCKS_USER="socksuser"              # Первый логин из SOCKS_DEFAULT_USERS (системные пользователи Linux)
@@ -245,6 +263,7 @@ SOCKS_SUBDOMAIN="proxy"             # proxy.$DOMAIN
 ```
 
 #### VPN-сервер (WireGuard)
+
 ```bash
 ENABLE_VPN="true"
 VPN_PORT="51820"                    # UDP; несовпадение с фаерволом — см. UFW на сервере
@@ -273,6 +292,7 @@ VPN_PUSH_ROUTES=""                  # Если REDIRECT_GATEWAY=false — доп
 ```
 
 #### Git-сервер (Gitea)
+
 ```bash
 ENABLE_GITEA=true
 GITEA_DOMAIN="git.$DOMAIN"
@@ -284,6 +304,7 @@ GITEA_DISABLE_REGISTRATION=true     # Только админ создает п�
 ```
 
 #### Облачное хранилище (NextCloud)
+
 ```bash
 ENABLE_NEXTCLOUD="true"
 NEXTCLOUD_VERSION="32.0.1"
@@ -293,6 +314,7 @@ NEXTCLOUD_ADMIN_USER="admin"
 ```
 
 #### Модули
+
 ```bash
 MODULES=""                          # Какие модули установить (пусто = все)
 SKIP_MODULES=""                     # Какие модули пропустить
@@ -348,7 +370,7 @@ SKIP_MODULES=""                     # Какие модули пропустит
 └── NextCloud (облако) → все таблицы NextCloud
 ```
 
-**Важно:** Roundcube подключается к почтовому серверу через **IMAP/SMTP localhost**, а не напрямую к БД. Его собственная БД нужна только для хранения сессий и настроек веб-интерфейса.
+> **Важно:** Roundcube подключается к почтовому серверу через **IMAP/SMTP localhost**, а не напрямую к БД. Его собственная БД нужна только для хранения сессий и настроек веб-интерфейса.
 
 ## Дополнительные почтовые ящики
 
@@ -360,6 +382,7 @@ ADDITIONAL_MAILBOXES="admin:SecurePass123,info,support:AnotherPass456"
 ```
 
 Формат: `user1:password1,user2,user3:password3`
+
 - Если пароль не указан - используется `ADMIN_PASSWORD`
 - Ящики создаются для домена `DOMAIN`
 
@@ -367,24 +390,27 @@ ADDITIONAL_MAILBOXES="admin:SecurePass123,info,support:AnotherPass456"
 
 После установки сервисы доступны по следующим адресам:
 
-| Сервис | URL | Порт | Описание |
-|--------|-----|------|----------|
-| Веб-сервер | `https://example.com` | 443 | Главный сайт |
-| PostfixAdmin | `https://mailadmin.example.com` | 443 | Управление почтой |
-| Roundcube | `https://webmail.example.com` | 443 | Веб-почта |
-| Gitea | `https://git.example.com` | 443 | Git-репозитории |
-| NextCloud | `https://cloud.example.com` | 443 | Облачное хранилище |
-| Squid Proxy | `proxy.example.com` | из `HTTP_PROXY_PORT` (часто 3128) | HTTP/HTTPS прокси, учётки в `PROXY_DEFAULT_USERS` |
-| Dante SOCKS5 | `proxy.example.com` | из `SOCKS_PORT` (часто 1080) | SOCKS5, учётки в `SOCKS_DEFAULT_USERS` |
-| WireGuard VPN | `vpn.example.com` | из `VPN_PORT` (часто 51820, UDP) | Клиенты в `VPN_DEFAULT_CLIENTS`, команда `wg-client` |
-| SSH | `example.com` | 22 | Удаленный доступ |
-| SMTP | `mail.example.com` | 25, 587 | Отправка почты |
-| IMAP | `mail.example.com` | 993 | Получение почты (SSL) |
-| POP3 | `mail.example.com` | 995 | Получение почты (SSL) |
+
+| Сервис        | URL                             | Порт                              | Описание                                             |
+| ------------- | ------------------------------- | --------------------------------- | ---------------------------------------------------- |
+| Веб-сервер    | `https://example.com`           | 443                               | Главный сайт                                         |
+| PostfixAdmin  | `https://mailadmin.example.com` | 443                               | Управление почтой                                    |
+| Roundcube     | `https://webmail.example.com`   | 443                               | Веб-почта                                            |
+| Gitea         | `https://git.example.com`       | 443                               | Git-репозитории                                      |
+| NextCloud     | `https://cloud.example.com`     | 443                               | Облачное хранилище                                   |
+| Squid Proxy   | `proxy.example.com`             | из `HTTP_PROXY_PORT` (часто 3128) | HTTP/HTTPS прокси, учётки в `PROXY_DEFAULT_USERS`    |
+| Dante SOCKS5  | `proxy.example.com`             | из `SOCKS_PORT` (часто 1080)      | SOCKS5, учётки в `SOCKS_DEFAULT_USERS`               |
+| WireGuard VPN | `vpn.example.com`               | из `VPN_PORT` (часто 51820, UDP)  | Клиенты в `VPN_DEFAULT_CLIENTS`, команда `wg-client` |
+| SSH           | `example.com`                   | 22                                | Удаленный доступ                                     |
+| SMTP          | `mail.example.com`              | 25, 587                           | Отправка почты                                       |
+| IMAP          | `mail.example.com`              | 993                               | Получение почты (SSL)                                |
+| POP3          | `mail.example.com`              | 995                               | Получение почты (SSL)                                |
+
 
 ## Устранение неполадок
 
 ### Просмотр логов
+
 ```bash
 # Лог событий установки
 tail -f ~/server_script/logs/install.log
@@ -402,6 +428,7 @@ journalctl -u postgresql -f
 ```
 
 ### Проверка статуса сервисов
+
 ```bash
 systemctl status nginx
 systemctl status postgresql
@@ -410,6 +437,7 @@ systemctl status dovecot
 ```
 
 ### Переустановка модуля
+
 ```bash
 # Один модуль (имя файла в modules/ без расширения .sh)
 ./install.sh --modules="08-web-server"
@@ -422,6 +450,7 @@ systemctl status dovecot
 ```
 
 ### Проверка портов
+
 ```bash
 ss -tlnp | grep -E ':(80|443|25|587|993|995|1080|3128|51820)'
 ```
@@ -440,6 +469,7 @@ ss -tlnp | grep -E ':(80|443|25|587|993|995|1080|3128|51820)'
 ### Обновление сертификатов Let's Encrypt
 
 Сертификаты обновляются автоматически через cron. Проверка:
+
 ```bash
 certbot renew --dry-run
 ```
